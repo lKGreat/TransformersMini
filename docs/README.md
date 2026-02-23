@@ -2,6 +2,12 @@
 
 This repository uses `docs/` as the primary driver of implementation work.
 
+## Hard rule (doc-first)
+
+- No implementation work may begin until the corresponding `REQ/ADR/ITER/TASK` documents are created or updated.
+- Code changes must be traceable back to a `TASK-ITER-xxxx-yyy` document.
+- Iteration completion requires an `AC-ITER-xxxx.md` evidence record.
+
 ## Required flow
 
 1. Create or update a requirement in `docs/requirements/`.
