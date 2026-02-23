@@ -36,6 +36,7 @@ partial class TrainingSetupPanel
         this.btnStartValidate = new System.Windows.Forms.Button();
         this.btnStartTest = new System.Windows.Forms.Button();
         this.btnCancelRun = new System.Windows.Forms.Button();
+        this.chkDryRun = new System.Windows.Forms.CheckBox();
         this.lblRuntimeHint = new System.Windows.Forms.Label();
         this.txtTagKey = new System.Windows.Forms.TextBox();
         this.txtTagValue = new System.Windows.Forms.TextBox();
@@ -195,12 +196,20 @@ partial class TrainingSetupPanel
         this.btnCancelRun.Text = "取消选中运行";
         this.btnCancelRun.Click += new System.EventHandler(this.btnCancelRun_Click);
         //
+        // chkDryRun
+        //
+        this.chkDryRun.AutoSize = true;
+        this.chkDryRun.Location = new System.Drawing.Point(444, 211);
+        this.chkDryRun.Name = "chkDryRun";
+        this.chkDryRun.Size = new System.Drawing.Size(67, 19);
+        this.chkDryRun.Text = "DryRun";
+        //
         // lblRuntimeHint
         //
         this.lblRuntimeHint.AutoSize = false;
-        this.lblRuntimeHint.Location = new System.Drawing.Point(454, 206);
+        this.lblRuntimeHint.Location = new System.Drawing.Point(520, 206);
         this.lblRuntimeHint.Name = "lblRuntimeHint";
-        this.lblRuntimeHint.Size = new System.Drawing.Size(620, 28);
+        this.lblRuntimeHint.Size = new System.Drawing.Size(554, 28);
         this.lblRuntimeHint.Text = "运行时状态";
         //
         // txtTagKey
@@ -304,6 +313,7 @@ partial class TrainingSetupPanel
         this.topPanel.Controls.Add(this.btnStartValidate);
         this.topPanel.Controls.Add(this.btnStartTest);
         this.topPanel.Controls.Add(this.btnCancelRun);
+        this.topPanel.Controls.Add(this.chkDryRun);
         this.topPanel.Controls.Add(this.lblRuntimeHint);
         this.topPanel.Controls.Add(this.lblTempConfig);
         this.topPanel.Location = new System.Drawing.Point(8, 8);
@@ -404,6 +414,7 @@ partial class TrainingSetupPanel
     private System.Windows.Forms.Button btnStartValidate;
     private System.Windows.Forms.Button btnStartTest;
     private System.Windows.Forms.Button btnCancelRun;
+    private System.Windows.Forms.CheckBox chkDryRun;
     private System.Windows.Forms.Label lblRuntimeHint;
     private System.Windows.Forms.TextBox txtTagKey;
     private System.Windows.Forms.TextBox txtTagValue;

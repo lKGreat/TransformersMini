@@ -2,8 +2,13 @@ using TransformersMini.Contracts.Abstractions;
 
 namespace TransformersMini.WinForms;
 
-public sealed class MainForm : Form
+public sealed class MainForm : Form, IWorkspaceShellContext
 {
+    private readonly NotificationPanelControl _notificationPanel = new() { Dock = DockStyle.Top };
+    private readonly InlineFilePickerControl _picker = new() { Dock = DockStyle.Right };
+    private Action<string>? _pickerCallback;
+    private readonly Panel _workspaceHost = new() { Dock = DockStyle.Fill };
+
     public MainForm(
         IRunControlService runControl,
         ISystemProbe systemProbe,
@@ -12,58 +17,97 @@ public sealed class MainForm : Form
         IAnnotationService annotationService)
     {
         Text = "TransformersMini Workbench";
-        Width = 1200;
-        Height = 820;
-        MinimumSize = new Size(1200, 780);
+        Width = 1400;
+        Height = 920;
+        MinimumSize = new Size(1320, 820);
 
-        var tabs = new TabControl { Dock = DockStyle.Fill };
-        var runTab = new TabPage("训练");
-        var inferenceTab = new TabPage("推理");
-        var annotationTab = new TabPage("标注");
-
-        var runPanel = new TrainingSetupPanel(runControl, runQueryRepository, systemProbe);
-        runTab.Controls.Add(runPanel);
-
-        var inferencePanel = new InferencePanel(inferenceOrchestrator, systemProbe, runQueryRepository);
-        inferenceTab.Controls.Add(inferencePanel);
-
-        var annotationIntroPanel = new Panel { Dock = DockStyle.Fill };
-        var annotationTitle = new Label
+        var leftNav = new ListBox
         {
-            Text = "增强标注工作台",
-            Font = new Font("Segoe UI", 13, FontStyle.Bold),
-            AutoSize = true,
-            Top = 26,
-            Left = 24
+            Dock = DockStyle.Fill,
+            Font = new Font("Segoe UI", 10, FontStyle.Regular),
+            IntegralHeight = false
         };
-        var annotationDesc = new Label
-        {
-            Text = "支持框选/移动/撤销重做、导入推理结果、COCO/YOLO 双向导入导出。",
-            AutoSize = true,
-            Top = 62,
-            Left = 24
-        };
-        var openAnnotationButton = new Button
-        {
-            Text = "打开标注工作台",
-            Width = 180,
-            Height = 38,
-            Top = 102,
-            Left = 24
-        };
-        openAnnotationButton.Click += (_, _) =>
-        {
-            var form = new AnnotationWorkspaceForm(annotationService);
-            form.Show(this);
-        };
-        annotationIntroPanel.Controls.Add(annotationTitle);
-        annotationIntroPanel.Controls.Add(annotationDesc);
-        annotationIntroPanel.Controls.Add(openAnnotationButton);
-        annotationTab.Controls.Add(annotationIntroPanel);
+        leftNav.Items.AddRange(["训练", "推理", "标注", "运行查询"]);
+        leftNav.SelectedIndex = 0;
 
-        tabs.TabPages.Add(runTab);
-        tabs.TabPages.Add(inferenceTab);
-        tabs.TabPages.Add(annotationTab);
-        Controls.Add(tabs);
+        var navContainer = new Panel { Dock = DockStyle.Left, Width = 180 };
+        var navTitle = new Label
+        {
+            Dock = DockStyle.Top,
+            Height = 36,
+            Font = new Font("Segoe UI", 10, FontStyle.Bold),
+            TextAlign = ContentAlignment.MiddleCenter,
+            Text = "工作区导航"
+        };
+        navContainer.Controls.Add(leftNav);
+        navContainer.Controls.Add(navTitle);
+
+        var trainPage = new TrainingSetupPanel(runControl, runQueryRepository, systemProbe, this) { Dock = DockStyle.Fill };
+        var inferPage = new InferenceWorkspaceControl(inferenceOrchestrator, systemProbe, runQueryRepository, this) { Dock = DockStyle.Fill };
+        var annotationPage = new AnnotationWorkspaceHostControl(annotationService, this) { Dock = DockStyle.Fill };
+        var queryPage = new RunListAndFilterPanel(runControl, runQueryRepository, systemProbe) { Dock = DockStyle.Fill };
+
+        leftNav.SelectedIndexChanged += (_, _) =>
+        {
+            _workspaceHost.Controls.Clear();
+            _picker.ClosePicker();
+            switch (leftNav.SelectedIndex)
+            {
+                case 0:
+                    _workspaceHost.Controls.Add(trainPage);
+                    ShowInfo("已切换到训练工作区。");
+                    break;
+                case 1:
+                    _workspaceHost.Controls.Add(inferPage);
+                    ShowInfo("已切换到推理工作区。");
+                    break;
+                case 2:
+                    _workspaceHost.Controls.Add(annotationPage);
+                    ShowInfo("已切换到标注工作区。");
+                    break;
+                default:
+                    _workspaceHost.Controls.Add(queryPage);
+                    ShowInfo("已切换到运行查询工作区。");
+                    break;
+            }
+        };
+
+        _picker.SelectionConfirmed += path =>
+        {
+            _picker.ClosePicker();
+            var callback = _pickerCallback;
+            _pickerCallback = null;
+            callback?.Invoke(path);
+        };
+        _picker.SelectionCancelled += () =>
+        {
+            _pickerCallback = null;
+            _picker.ClosePicker();
+            ShowInfo("已取消选择。");
+        };
+
+        Controls.Add(_workspaceHost);
+        Controls.Add(_picker);
+        Controls.Add(navContainer);
+        Controls.Add(_notificationPanel);
+        _workspaceHost.Controls.Add(trainPage);
+    }
+
+    public void ShowInfo(string message) => _notificationPanel.ShowInfo(message);
+    public void ShowWarning(string message) => _notificationPanel.ShowWarning(message);
+    public void ShowError(string message) => _notificationPanel.ShowError(message);
+
+    public void PickFile(string? initialPath, Action<string> onSelected)
+    {
+        _pickerCallback = onSelected;
+        _picker.Open(PickerSelectionMode.File, initialPath);
+        ShowInfo("请选择文件。");
+    }
+
+    public void PickFolder(string? initialPath, Action<string> onSelected)
+    {
+        _pickerCallback = onSelected;
+        _picker.Open(PickerSelectionMode.Folder, initialPath);
+        ShowInfo("请选择目录。");
     }
 }

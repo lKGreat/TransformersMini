@@ -32,6 +32,7 @@ if (command == "infer")
     Console.WriteLine($"Status: {inferResult.Status}");
     Console.WriteLine($"Message: {inferResult.Message}");
     Console.WriteLine($"RunDir: {inferResult.RunDirectory}");
+    await PrintInferenceResultsAsync(inferResult.RunDirectory, maxSamplesToPrint: 5);
     return;
 }
 
@@ -464,6 +465,155 @@ static string ToRelativeIfUnderRoot(string rootPath, string fullFilePath)
     }
 
     return Path.GetRelativePath(normalizedRoot, normalizedFile);
+}
+
+static async Task PrintInferenceResultsAsync(string runDirectory, int maxSamplesToPrint)
+{
+    var reportPath = Path.Combine(runDirectory, "reports", "inference.json");
+    var samplesPath = Path.Combine(runDirectory, "reports", "inference-samples.jsonl");
+    if (!File.Exists(reportPath) && !File.Exists(samplesPath))
+    {
+        Console.WriteLine("未找到推理结果文件（reports/inference.json 或 inference-samples.jsonl）。");
+        return;
+    }
+
+    string? task = null;
+    if (File.Exists(reportPath))
+    {
+        var reportJson = await File.ReadAllTextAsync(reportPath);
+        using var reportDoc = JsonDocument.Parse(reportJson);
+        if (reportDoc.RootElement.TryGetProperty("task", out var taskElement))
+        {
+            task = taskElement.GetString();
+        }
+
+        Console.WriteLine("---- 推理汇总 ----");
+        foreach (var property in reportDoc.RootElement.EnumerateObject())
+        {
+            Console.WriteLine($"{property.Name}: {property.Value.GetRawText()}");
+        }
+    }
+
+    if (!File.Exists(samplesPath))
+    {
+        return;
+    }
+
+    var lines = await File.ReadAllLinesAsync(samplesPath);
+    Console.WriteLine($"---- 样本级结果（前 {Math.Min(maxSamplesToPrint, lines.Length)} 条） ----");
+    for (var i = 0; i < lines.Length && i < maxSamplesToPrint; i++)
+    {
+        var line = lines[i];
+        if (string.IsNullOrWhiteSpace(line))
+        {
+            continue;
+        }
+
+        using var sampleDoc = JsonDocument.Parse(line);
+        var root = sampleDoc.RootElement;
+        var sampleId = TryReadString(root, "sampleId") ?? TryReadString(root, "imagePath") ?? $"sample-{i + 1}";
+
+        if (string.Equals(task, "ocr", StringComparison.OrdinalIgnoreCase))
+        {
+            var predicted = TryReadString(root, "predictedText") ?? TryReadString(root, "prediction") ?? string.Empty;
+            var target = TryReadString(root, "targetText") ?? TryReadString(root, "label") ?? string.Empty;
+            var cer = TryReadNumber(root, "cer");
+            Console.WriteLine($"[{i + 1}] {sampleId}");
+            Console.WriteLine($"  Predicted: {predicted}");
+            Console.WriteLine($"  Target: {target}");
+            if (cer is not null)
+            {
+                Console.WriteLine($"  CER: {cer.Value.ToString("0.######", CultureInfo.InvariantCulture)}");
+            }
+
+            continue;
+        }
+
+        if (root.TryGetProperty("detections", out var detections) && detections.ValueKind == JsonValueKind.Array)
+        {
+            Console.WriteLine($"[{i + 1}] {sampleId} detections={detections.GetArrayLength()}");
+            var rank = 1;
+            foreach (var detection in detections.EnumerateArray())
+            {
+                if (rank > 5)
+                {
+                    break;
+                }
+
+                var cls = TryReadString(detection, "className") ?? TryReadString(detection, "classId") ?? "unknown";
+                var score = TryReadNumber(detection, "score");
+                var box = $"x={TryReadNumber(detection, "x")?.ToString("0.##", CultureInfo.InvariantCulture) ?? "?"}, " +
+                          $"y={TryReadNumber(detection, "y")?.ToString("0.##", CultureInfo.InvariantCulture) ?? "?"}, " +
+                          $"w={TryReadNumber(detection, "width")?.ToString("0.##", CultureInfo.InvariantCulture) ?? "?"}, " +
+                          $"h={TryReadNumber(detection, "height")?.ToString("0.##", CultureInfo.InvariantCulture) ?? "?"}";
+                Console.WriteLine($"  - #{rank} class={cls} score={(score?.ToString("0.####", CultureInfo.InvariantCulture) ?? "?")} {box}");
+                rank++;
+            }
+            continue;
+        }
+
+        if (root.TryGetProperty("boxes", out var boxes) && boxes.ValueKind == JsonValueKind.Array)
+        {
+            var sourcePath = TryReadString(root, "sourcePath") ?? string.Empty;
+            Console.WriteLine($"[{i + 1}] {sampleId} source={sourcePath} boxes={boxes.GetArrayLength()}");
+            var rank = 1;
+            foreach (var box in boxes.EnumerateArray())
+            {
+                if (rank > 5)
+                {
+                    break;
+                }
+
+                var categoryId = TryReadString(box, "categoryId") ?? "unknown";
+                var score = TryReadNumber(box, "score");
+                var center = $"cx={TryReadNumber(box, "cx")?.ToString("0.###", CultureInfo.InvariantCulture) ?? "?"}, " +
+                             $"cy={TryReadNumber(box, "cy")?.ToString("0.###", CultureInfo.InvariantCulture) ?? "?"}";
+                var size = $"bw={TryReadNumber(box, "bw")?.ToString("0.###", CultureInfo.InvariantCulture) ?? "?"}, " +
+                           $"bh={TryReadNumber(box, "bh")?.ToString("0.###", CultureInfo.InvariantCulture) ?? "?"}";
+                Console.WriteLine($"  - #{rank} categoryId={categoryId} score={(score?.ToString("0.####", CultureInfo.InvariantCulture) ?? "?")} {center} {size}");
+                rank++;
+            }
+            continue;
+        }
+
+        Console.WriteLine($"[{i + 1}] {sampleId} {line}");
+    }
+}
+
+static string? TryReadString(JsonElement element, string name)
+{
+    if (!element.TryGetProperty(name, out var value))
+    {
+        return null;
+    }
+
+    return value.ValueKind switch
+    {
+        JsonValueKind.String => value.GetString(),
+        JsonValueKind.Number => value.GetRawText(),
+        _ => value.GetRawText()
+    };
+}
+
+static double? TryReadNumber(JsonElement element, string name)
+{
+    if (!element.TryGetProperty(name, out var value))
+    {
+        return null;
+    }
+
+    if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number))
+    {
+        return number;
+    }
+
+    if (value.ValueKind == JsonValueKind.String &&
+        double.TryParse(value.GetString(), NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed))
+    {
+        return parsed;
+    }
+
+    return null;
 }
 
 file sealed class DataTrainingCliArgs

@@ -14,6 +14,7 @@ public sealed partial class TrainingSetupPanel : UserControl
     private readonly IRunControlService _runControl;
     private readonly IRunQueryRepository _runQueryRepository;
     private readonly ISystemProbe _systemProbe;
+    private readonly IWorkspaceShellContext _shell;
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1500 };
     private bool _isRefreshing;
 
@@ -27,13 +28,15 @@ public sealed partial class TrainingSetupPanel : UserControl
         JsonOptions.Converters.Add(new JsonStringEnumConverter());
     }
 
-    public TrainingSetupPanel(IRunControlService runControl, IRunQueryRepository runQueryRepository, ISystemProbe systemProbe)
+    public TrainingSetupPanel(IRunControlService runControl, IRunQueryRepository runQueryRepository, ISystemProbe systemProbe, IWorkspaceShellContext shell)
     {
         _runControl = runControl;
         _runQueryRepository = runQueryRepository;
         _systemProbe = systemProbe;
+        _shell = shell;
         InitializeComponent();
         InitializeDefaults();
+        CleanupOldTempConfigs();
 
         _timer.Tick += async (_, _) => await RefreshRunsAsync();
         HandleCreated += async (_, _) =>
@@ -91,31 +94,21 @@ public sealed partial class TrainingSetupPanel : UserControl
 
     private void btnBrowseAnnotation_Click(object sender, EventArgs e)
     {
-        using var dialog = new OpenFileDialog
+        _shell.PickFile(txtAnnotationPath.Text, path =>
         {
-            Filter = "标注文件 (*.json;*.jsonl;*.txt)|*.json;*.jsonl;*.txt|所有文件 (*.*)|*.*",
-            Title = "选择标注文件"
-        };
-        if (dialog.ShowDialog(this) != DialogResult.OK)
-        {
-            return;
-        }
-
-        txtAnnotationPath.Text = dialog.FileName;
-        TryAutoDetectFormat(dialog.FileName);
+            txtAnnotationPath.Text = path;
+            TryAutoDetectFormat(path);
+            _shell.ShowInfo($"已选择标注文件：{path}");
+        });
     }
 
     private void btnBrowseImageRoot_Click(object sender, EventArgs e)
     {
-        using var dialog = new FolderBrowserDialog
+        _shell.PickFolder(txtImageRoot.Text, path =>
         {
-            Description = "选择图像根目录",
-            UseDescriptionForTitle = true
-        };
-        if (dialog.ShowDialog(this) == DialogResult.OK)
-        {
-            txtImageRoot.Text = dialog.SelectedPath;
-        }
+            txtImageRoot.Text = path;
+            _shell.ShowInfo($"已选择图像目录：{path}");
+        });
     }
 
     private void TryAutoDetectFormat(string annotationPath)
@@ -162,7 +155,7 @@ public sealed partial class TrainingSetupPanel : UserControl
         {
             if (!ValidateBuildModeAndDeviceSelection(out var warningText))
             {
-                MessageBox.Show(this, warningText, "运行配置提示", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                _shell.ShowWarning(warningText);
                 return;
             }
 
@@ -174,15 +167,17 @@ public sealed partial class TrainingSetupPanel : UserControl
             {
                 ConfigPath = configPath,
                 ForcedMode = runMode,
-                ForcedDevice = config.Device
+                ForcedDevice = NormalizeDeviceForBuild(config.Device),
+                DryRun = chkDryRun.Checked
             }, CancellationToken.None);
 
             txtDetails.Text = $"Started run: {runId}\r\nTempConfig: {configPath}";
+            _shell.ShowInfo($"已提交运行：{runId}");
             await RefreshRunsAsync();
         }
         catch (Exception ex)
         {
-            MessageBox.Show(this, ex.Message, "启动失败", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            _shell.ShowError($"启动失败：{ex.Message}");
         }
     }
 
@@ -343,6 +338,7 @@ public sealed partial class TrainingSetupPanel : UserControl
         }
 
         await _runControl.CancelAsync(run.RunId, CancellationToken.None);
+        _shell.ShowInfo($"已请求取消运行：{run.RunId}");
         await RefreshRunsAsync();
     }
 
@@ -495,5 +491,41 @@ public sealed partial class TrainingSetupPanel : UserControl
 #else
         return false;
 #endif
+    }
+
+    private static DeviceType NormalizeDeviceForBuild(DeviceType configured)
+    {
+        if (!IsTorchSharpCudaBuild() && configured == DeviceType.Auto)
+        {
+            return DeviceType.Cpu;
+        }
+
+        return configured;
+    }
+
+    private static void CleanupOldTempConfigs()
+    {
+        try
+        {
+            var tempDir = Path.Combine(Path.GetTempPath(), "TransformersMini", "temp-configs");
+            if (!Directory.Exists(tempDir))
+            {
+                return;
+            }
+
+            var threshold = DateTime.Now.AddDays(-7);
+            foreach (var file in Directory.EnumerateFiles(tempDir, "*.json"))
+            {
+                var info = new FileInfo(file);
+                if (info.LastWriteTime < threshold)
+                {
+                    info.Delete();
+                }
+            }
+        }
+        catch
+        {
+            // 中文说明：清理失败不影响主流程。
+        }
     }
 }
