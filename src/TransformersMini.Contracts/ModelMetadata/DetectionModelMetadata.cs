@@ -3,6 +3,7 @@ namespace TransformersMini.Contracts.ModelMetadata;
 /// <summary>
 /// 检测模型 artifacts/model-metadata.json 顶层结构。
 /// 训练完成后写入，供推理链路读取恢复模型参数。
+/// YoloArchitecture 为可选字段（null 表示旧版 TinyMultiHead 架构），保持向后兼容。
 /// </summary>
 public sealed record DetectionModelMetadataDto(
     string Framework,
@@ -14,10 +15,12 @@ public sealed record DetectionModelMetadataDto(
     DetectionTargetEncodingDto TargetEncoding,
     DetectionLossWeightsDto LossWeights,
     string HeadType,
-    string Status);
+    string Status,
+    YoloArchitectureDto? YoloArchitecture = null);
 
 /// <summary>
 /// 检测训练 reports/summary.json 顶层结构。
+/// YoloArchitecture 为可选字段，保持向后兼容。
 /// </summary>
 public sealed record DetectionTrainSummaryDto(
     string Task,
@@ -33,7 +36,8 @@ public sealed record DetectionTrainSummaryDto(
     DetectionLossWeightsDto LossWeights,
     DetectionLossSummaryDto LossSummary,
     string HeadType,
-    string Status);
+    string Status,
+    YoloArchitectureDto? YoloArchitecture = null);
 
 /// <summary>
 /// 检测验证/测试 reports/validate.json、reports/test.json 顶层结构。
@@ -113,3 +117,22 @@ public sealed record DetectionEvalSampleDetailDto(
     int FalsePositive,
     int FalseNegative,
     double MeanMatchedIou);
+
+/// <summary>
+/// YOLO 架构参数快照（仅在使用 YoloDetectionModel 时写入）。
+/// </summary>
+public sealed record YoloArchitectureDto(
+    string BackboneScale,
+    int RegMax,
+    int NumClasses,
+    int[] Strides);
+
+/// <summary>
+/// YOLO 训练 loss 汇总（box/cls/dfl 分解）。
+/// </summary>
+public sealed record YoloLossSummaryDto(
+    double AverageTotalLoss,
+    double AverageBoxLoss,
+    double AverageClsLoss,
+    double AverageDflLoss,
+    int TrainStepCount);
