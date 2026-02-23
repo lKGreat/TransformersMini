@@ -1,7 +1,7 @@
 # TASK-ITER-0006-003 推理主线后续迭代任务拆分
 
 - ID: `TASK-ITER-0006-003`
-- Status: `Todo`
+- Status: `Done`
 - Iteration: `ITER-0006`
 - Requirement: `REQ-0004`, `REQ-0005`, `REQ-0006`
 - ADR: `ADR-0005`, `ADR-0007`, `ADR-0008`, `ADR-0009`
@@ -27,3 +27,7 @@
 ## Done Definition
 
 - 后续迭代具备可执行的任务清单，不需要临时补文档再开工
+
+## Result
+
+- 已新增 `ITER-0007`~`ITER-0009` 与对应任务卡骨架

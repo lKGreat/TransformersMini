@@ -1,7 +1,7 @@
 # TASK-ITER-0006-001 文档状态纠偏与路线图刷新
 
 - ID: `TASK-ITER-0006-001`
-- Status: `Todo`
+- Status: `Done`
 - Iteration: `ITER-0006`
 - Requirement: `REQ-0002`, `REQ-0003`
 - ADR: `ADR-0002`, `ADR-0004`
@@ -24,3 +24,7 @@
 ## Done Definition
 
 - 文档不再声明已实现功能为“未完成”
+
+## Result
+
+- `ROADMAP`、`REQ-0002`、`REQ-0003` 已按当前代码状态回填

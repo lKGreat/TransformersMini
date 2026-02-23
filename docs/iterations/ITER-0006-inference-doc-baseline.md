@@ -1,9 +1,9 @@
 # ITER-0006 推理主线文档基线与接口冻结
 
 - ID: `ITER-0006`
-- Status: `Planned`
-- Start: `pending`
-- End: `pending`
+- Status: `Completed`
+- Start: `2026-02-23`
+- End: `2026-02-23`
 - Related Requirements: `REQ-0004`, `REQ-0005`, `REQ-0006`, `REQ-0007`
 - Related ADRs: `ADR-0005`, `ADR-0006`, `ADR-0007`, `ADR-0008`, `ADR-0009`, `ADR-0010`
 
@@ -38,3 +38,11 @@
 
 - `REQ/ADR/ITER/TASK` 链完整可执行
 - 后续实现无需再做架构性临时决策
+
+## Delivered
+
+- 推理与实验平台长期主线 REQ 文档（`REQ-0004`~`REQ-0007`）
+- 推理主线关键 ADR 文档（`ADR-0005`~`ADR-0010`）
+- `ITER-0004` / `ITER-0005` 回填与 `ITER-0006` 文档基线
+- 后续推理主线迭代与任务卡骨架（`ITER-0007`~`ITER-0009` + 任务卡）
+- 验收证据模板强化与 `AC-ITER-0006` 草案回填

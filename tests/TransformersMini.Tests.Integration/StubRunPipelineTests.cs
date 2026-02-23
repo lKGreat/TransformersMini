@@ -211,7 +211,7 @@ public sealed class StubRunPipelineTests
             using var summaryDoc = JsonDocument.Parse(await File.ReadAllTextAsync(summaryPath));
             Assert.Equal("torchsharp-train-complete", summaryDoc.RootElement.GetProperty("status").GetString());
             var preprocessing = summaryDoc.RootElement.GetProperty("preprocessing");
-            Assert.Equal(32, preprocessing.GetProperty("InputSize").GetInt32());
+            Assert.Equal(32, GetPropertyIgnoreCase(preprocessing, "InputSize").GetInt32());
             Assert.Equal(targetBoxStrategy, preprocessing.GetProperty("targetBoxStrategy").GetString());
             Assert.Equal("bilinear", preprocessing.GetProperty("resizeSampler").GetString());
             var targetEncoding = summaryDoc.RootElement.GetProperty("targetEncoding");
@@ -219,16 +219,26 @@ public sealed class StubRunPipelineTests
             Assert.Equal(6, targetEncoding.GetProperty("valuesPerBox").GetInt32());
             Assert.Equal(12, targetEncoding.GetProperty("flattenedSize").GetInt32());
             var lossWeights = summaryDoc.RootElement.GetProperty("lossWeights");
-            Assert.Equal(1d, lossWeights.GetProperty("Bbox").GetDouble());
-            Assert.Equal(0.5d, lossWeights.GetProperty("Category").GetDouble());
-            Assert.Equal(1d, lossWeights.GetProperty("Objectness").GetDouble());
+            Assert.Equal(1d, GetPropertyIgnoreCase(lossWeights, "Bbox").GetDouble());
+            Assert.Equal(0.5d, GetPropertyIgnoreCase(lossWeights, "Category").GetDouble());
+            Assert.Equal(1d, GetPropertyIgnoreCase(lossWeights, "Objectness").GetDouble());
             var lossSummary = summaryDoc.RootElement.GetProperty("lossSummary");
-            Assert.True(lossSummary.GetProperty("AverageTotalLoss").GetDouble() >= 0d);
-            Assert.True(lossSummary.GetProperty("AverageBboxLoss").GetDouble() >= 0d);
-            Assert.True(lossSummary.GetProperty("AverageCategoryLoss").GetDouble() >= 0d);
-            Assert.True(lossSummary.GetProperty("AverageObjectnessLoss").GetDouble() >= 0d);
-            Assert.True(lossSummary.GetProperty("TrainStepCount").GetInt32() >= 1);
+            Assert.True(GetPropertyIgnoreCase(lossSummary, "AverageTotalLoss").GetDouble() >= 0d);
+            Assert.True(GetPropertyIgnoreCase(lossSummary, "AverageBboxLoss").GetDouble() >= 0d);
+            Assert.True(GetPropertyIgnoreCase(lossSummary, "AverageCategoryLoss").GetDouble() >= 0d);
+            Assert.True(GetPropertyIgnoreCase(lossSummary, "AverageObjectnessLoss").GetDouble() >= 0d);
+            Assert.True(GetPropertyIgnoreCase(lossSummary, "TrainStepCount").GetInt32() >= 1);
             Assert.Equal("multi-branch", summaryDoc.RootElement.GetProperty("headType").GetString());
+
+            var modelMetadataPath = Path.Combine(result.RunDirectory, "artifacts", "model-metadata.json");
+            Assert.True(File.Exists(modelMetadataPath));
+            using var modelMetadataDoc = JsonDocument.Parse(await File.ReadAllTextAsync(modelMetadataPath));
+            Assert.Equal("TorchSharp", GetPropertyIgnoreCase(modelMetadataDoc.RootElement, "Framework").GetString());
+            Assert.Equal("detection", GetPropertyIgnoreCase(modelMetadataDoc.RootElement, "Task").GetString());
+            Assert.True(GetPropertyIgnoreCase(modelMetadataDoc.RootElement, "Preprocessing").ValueKind == JsonValueKind.Object);
+            Assert.True(GetPropertyIgnoreCase(GetPropertyIgnoreCase(modelMetadataDoc.RootElement, "Preprocessing"), "InputSize").ValueKind != JsonValueKind.Undefined);
+            Assert.True(GetPropertyIgnoreCase(modelMetadataDoc.RootElement, "TargetEncoding").ValueKind == JsonValueKind.Object);
+            Assert.True(GetPropertyIgnoreCase(GetPropertyIgnoreCase(modelMetadataDoc.RootElement, "TargetEncoding"), "TopK").ValueKind != JsonValueKind.Undefined);
         }
         finally
         {
@@ -635,5 +645,18 @@ public sealed class StubRunPipelineTests
         }
 
         await image.SaveAsPngAsync(path);
+    }
+
+    private static JsonElement GetPropertyIgnoreCase(JsonElement element, string propertyName)
+    {
+        foreach (var property in element.EnumerateObject())
+        {
+            if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                return property.Value;
+            }
+        }
+
+        throw new KeyNotFoundException($"Property not found: {propertyName}");
     }
 }

@@ -1,7 +1,7 @@
 # TASK-ITER-0006-004 文档先行实施的验收证据模板
 
 - ID: `TASK-ITER-0006-004`
-- Status: `Todo`
+- Status: `Done`
 - Iteration: `ITER-0006`
 - Requirement: `REQ-0006`
 - ADR: `ADR-0007`, `ADR-0008`, `ADR-0009`
@@ -28,3 +28,8 @@
 ## Done Definition
 
 - 验收文档模板可直接用于后续迭代，不需要重复设计结构
+
+## Result
+
+- `acceptance.template.md` 已补充构建/测试、CLI、WinForms、报告、任务关联证据结构
+- `AC-ITER-0006` 已按模板思路回填

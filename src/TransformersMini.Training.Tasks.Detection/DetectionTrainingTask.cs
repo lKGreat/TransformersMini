@@ -22,6 +22,10 @@ public sealed class DetectionTrainingTask : ITrainingTask
     private const double DetectionBboxLossWeight = 1.0d;
     private const double DetectionCategoryLossWeight = 0.5d;
     private const double DetectionObjectnessLossWeight = 1.0d;
+    private static readonly JsonSerializerOptions TrainArtifactJsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
 
     public TaskType TaskType => TaskType.Detection;
 
@@ -176,65 +180,37 @@ public sealed class DetectionTrainingTask : ITrainingTask
             await context.ArtifactStore.WriteTextAsync(
                 context.RunId,
                 "artifacts/model-metadata.json",
-                JsonSerializer.Serialize(new
-                {
-                    framework = "TorchSharp",
-                    task = "detection",
-                    device = context.Config.Device.ToString(),
-                    model = string.IsNullOrWhiteSpace(context.Config.Model.Architecture) ? "tiny-cnn-detector-multihead" : context.Config.Model.Architecture,
+                JsonSerializer.Serialize(new DetectionTrainModelMetadataReport(
+                    "TorchSharp",
+                    "detection",
+                    context.Config.Device.ToString(),
+                    string.IsNullOrWhiteSpace(context.Config.Model.Architecture) ? "tiny-cnn-detector-multihead" : context.Config.Model.Architecture,
                     inputSize,
-                    preprocessing = new
-                    {
-                        tensorOptions.InputSize,
-                        normalizeMean = tensorOptions.NormalizeMean,
-                        normalizeStd = tensorOptions.NormalizeStd,
-                        resizeSampler = tensorOptions.ResamplerName,
-                        targetBoxStrategy = tensorOptions.TargetBoxStrategy
-                    },
-                    targetEncoding = new
-                    {
-                        topK = tensorOptions.TargetTopK,
-                        valuesPerBox = DetectionTargetBoxValueCount,
-                        flattenedSize = tensorOptions.TargetTopK * DetectionTargetBoxValueCount
-                    },
+                    DetectionPreprocessingSnapshot.FromTensorOptions(tensorOptions),
+                    DetectionTargetEncodingSnapshot.FromTopK(tensorOptions.TargetTopK),
                     lossWeights,
-                    headType = "multi-branch",
-                    status = "trained"
-                }),
+                    "multi-branch",
+                    "trained"), TrainArtifactJsonOptions),
                 ct);
 
             await context.ArtifactStore.WriteTextAsync(
                 context.RunId,
                 "reports/summary.json",
-                JsonSerializer.Serialize(new
-                {
-                    task = "detection",
-                    mode = "Train",
-                    backend = context.Config.Backend.ToString(),
-                    device = context.Config.Device.ToString(),
+                JsonSerializer.Serialize(new DetectionTrainSummaryReport(
+                    "detection",
+                    "Train",
+                    context.Config.Backend.ToString(),
+                    context.Config.Device.ToString(),
                     sampleCount,
                     epochs,
                     stepsPerEpoch,
                     inputSize,
-                    preprocessing = new
-                    {
-                        tensorOptions.InputSize,
-                        normalizeMean = tensorOptions.NormalizeMean,
-                        normalizeStd = tensorOptions.NormalizeStd,
-                        resizeSampler = tensorOptions.ResamplerName,
-                        targetBoxStrategy = tensorOptions.TargetBoxStrategy
-                    },
-                    targetEncoding = new
-                    {
-                        topK = tensorOptions.TargetTopK,
-                        valuesPerBox = DetectionTargetBoxValueCount,
-                        flattenedSize = tensorOptions.TargetTopK * DetectionTargetBoxValueCount
-                    },
+                    DetectionPreprocessingSnapshot.FromTensorOptions(tensorOptions),
+                    DetectionTargetEncodingSnapshot.FromTopK(tensorOptions.TargetTopK),
                     lossWeights,
-                    lossSummary = trainLossSummary,
-                    headType = "multi-branch",
-                    status = "torchsharp-train-complete"
-                }),
+                    trainLossSummary,
+                    "multi-branch",
+                    "torchsharp-train-complete"), TrainArtifactJsonOptions),
                 ct);
 
             return new RunResult(context.RunId, RunStatus.Succeeded, "Detection TorchSharp 训练完成。", context.RunDirectory);
@@ -305,16 +281,8 @@ public sealed class DetectionTrainingTask : ITrainingTask
                     context.Config.Device.ToString(),
                     sampleCount,
                     inputSize,
-                    new DetectionPreprocessingSnapshot(
-                        tensorOptions.InputSize,
-                        tensorOptions.NormalizeMean,
-                        tensorOptions.NormalizeStd,
-                        tensorOptions.ResamplerName,
-                        tensorOptions.TargetBoxStrategy),
-                    new DetectionTargetEncodingSnapshot(
-                        tensorOptions.TargetTopK,
-                        DetectionTargetBoxValueCount,
-                        tensorOptions.TargetTopK * DetectionTargetBoxValueCount),
+                    DetectionPreprocessingSnapshot.FromTensorOptions(tensorOptions),
+                    DetectionTargetEncodingSnapshot.FromTopK(tensorOptions.TargetTopK),
                     "approx-iou-pr",
                     evalMetrics,
                     evalResult.SampleDetails,
@@ -1134,17 +1102,61 @@ public sealed class DetectionTrainingTask : ITrainingTask
         double AverageObjectnessLoss,
         int TrainStepCount);
 
+    private sealed record DetectionTrainModelMetadataReport(
+        string Framework,
+        string Task,
+        string Device,
+        string Model,
+        int InputSize,
+        DetectionPreprocessingSnapshot Preprocessing,
+        DetectionTargetEncodingSnapshot TargetEncoding,
+        DetectionLossWeightsSnapshot LossWeights,
+        string HeadType,
+        string Status);
+
+    private sealed record DetectionTrainSummaryReport(
+        string Task,
+        string Mode,
+        string Backend,
+        string Device,
+        int SampleCount,
+        int Epochs,
+        int StepsPerEpoch,
+        int InputSize,
+        DetectionPreprocessingSnapshot Preprocessing,
+        DetectionTargetEncodingSnapshot TargetEncoding,
+        DetectionLossWeightsSnapshot LossWeights,
+        DetectionTrainLossSummarySnapshot LossSummary,
+        string HeadType,
+        string Status);
+
     private sealed record DetectionPreprocessingSnapshot(
         int InputSize,
         float[] NormalizeMean,
         float[] NormalizeStd,
         string ResizeSampler,
-        string TargetBoxStrategy);
+        string TargetBoxStrategy)
+    {
+        public static DetectionPreprocessingSnapshot FromTensorOptions(DetectionTensorOptions options) =>
+            new(
+                options.InputSize,
+                options.NormalizeMean,
+                options.NormalizeStd,
+                options.ResamplerName,
+                options.TargetBoxStrategy);
+    }
 
     private sealed record DetectionTargetEncodingSnapshot(
         int TopK,
         int ValuesPerBox,
-        int FlattenedSize);
+        int FlattenedSize)
+    {
+        public static DetectionTargetEncodingSnapshot FromTopK(int topK) =>
+            new(
+                topK,
+                DetectionTargetBoxValueCount,
+                topK * DetectionTargetBoxValueCount);
+    }
 
     private sealed record ApproxDetectionEvalMetrics(
         double MeanIou,

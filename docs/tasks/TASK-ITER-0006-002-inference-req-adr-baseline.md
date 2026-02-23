@@ -1,7 +1,7 @@
 # TASK-ITER-0006-002 推理主线 REQ/ADR 基线文档
 
 - ID: `TASK-ITER-0006-002`
-- Status: `Todo`
+- Status: `Done`
 - Iteration: `ITER-0006`
 - Requirement: `REQ-0004`, `REQ-0005`, `REQ-0006`, `REQ-0007`
 - ADR: `ADR-0005`, `ADR-0006`, `ADR-0007`, `ADR-0008`, `ADR-0009`, `ADR-0010`
@@ -24,3 +24,7 @@
 ## Done Definition
 
 - 相关 REQ/ADR 文档创建完成并可直接指导下阶段任务拆分
+
+## Result
+
+- 已新增 `REQ-0004`~`REQ-0007` 与 `ADR-0005`~`ADR-0010`
