@@ -17,11 +17,11 @@ public sealed class MainForm : Form
         MinimumSize = new Size(1200, 780);
 
         var tabs = new TabControl { Dock = DockStyle.Fill };
-        var runTab = new TabPage("运行与查询");
+        var runTab = new TabPage("训练");
         var inferenceTab = new TabPage("推理");
         var annotationTab = new TabPage("标注");
 
-        var runPanel = new RunListAndFilterPanel(runControl, runQueryRepository, systemProbe);
+        var runPanel = new TrainingSetupPanel(runControl, runQueryRepository, systemProbe);
         runTab.Controls.Add(runPanel);
 
         var inferencePanel = new InferencePanel(inferenceOrchestrator, systemProbe);
