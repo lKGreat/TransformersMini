@@ -1,0 +1,111 @@
+# Build results
+[Dd]ebug/
+[Rr]elease/
+[Bb]in/
+[Oo]bj/
+[Ll]og/
+[Ll]ogs/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Oo]ut/
+[Bb]uild/
+
+# Visual Studio
+.vs/
+*.user
+*.userosscache
+*.sln.docstates
+*.rsuser
+*.suo
+*.userprefs
+
+# Rider
+.idea/
+*.sln.iml
+
+# VS Code
+.vscode/
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# .NET
+project.lock.json
+project.fragment.lock.json
+artifacts/
+*.nupkg
+*.snupkg
+*.nuget.props
+*.nuget.targets
+packages/
+.nuget/
+
+# Dotnet local tools / telemetry
+.dotnet/
+.dotnet-cli/
+
+# Training runs & artifacts (runs 目录为训练输出，含 DB 与权重)
+runs/
+
+# Model weights & checkpoints (若放在仓库其他位置也忽略)
+*.pt
+*.pth
+*.onnx
+*.bin
+*.safetensors
+*.ckpt
+checkpoints/
+
+# Test & coverage
+[Tt]est[Rr]esult*/
+[Cc]overage/
+*.trx
+*.coverage
+*.coveragexml
+coverage*.json
+coverage*.xml
+.coverage
+htmlcov/
+.nyc_output/
+
+# User-specific / secrets
+*.local
+appsettings.*.local.json
+secrets.json
+.env
+.env.*
+!.env.example
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Python (若项目中有脚本)
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+venv/
+.venv/
+env/
+.env/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Misc
+*.log
+*.tmp
+*.temp
+*.swp
+*~
+.cache/

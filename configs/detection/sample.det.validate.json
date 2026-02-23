@@ -1,0 +1,24 @@
+{
+  "configVersion": "1.0",
+  "runName": "det-sample-validate",
+  "mode": "Validate",
+  "task": "Detection",
+  "backend": "TorchSharp",
+  "device": "Auto",
+  "dataset": {
+    "format": "coco",
+    "rootPath": "data/samples/detection",
+    "annotationPath": "annotations/val.json"
+  },
+  "model": {
+    "name": "detector-mvp",
+    "architecture": "yolo-like"
+  },
+  "optimization": {
+    "epochs": 1,
+    "batchSize": 2,
+    "learningRate": 0.001,
+    "seed": 42
+  },
+  "taskOptions": {}
+}

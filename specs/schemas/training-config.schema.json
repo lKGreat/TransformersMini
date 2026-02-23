@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://transformersmini.local/schemas/training-config.schema.json",
+  "title": "TrainingConfig",
+  "type": "object",
+  "required": ["configVersion", "mode", "task", "backend", "dataset", "optimization"],
+  "properties": {
+    "configVersion": { "type": "string" },
+    "runName": { "type": "string" },
+    "mode": { "type": "string", "enum": ["Train", "Validate", "Test"] },
+    "task": { "type": "string", "enum": ["Detection", "Ocr"] },
+    "backend": { "type": "string", "enum": ["TorchSharp", "MLNet"] },
+    "device": { "type": "string", "enum": ["Auto", "Cpu", "Cuda"] },
+    "dataset": {
+      "type": "object",
+      "required": ["format"],
+      "properties": {
+        "format": { "type": "string" },
+        "rootPath": { "type": "string" },
+        "annotationPath": { "type": "string" },
+        "manifestPath": { "type": ["string", "null"] },
+        "trainSplit": { "type": "string" },
+        "valSplit": { "type": "string" },
+        "testSplit": { "type": "string" },
+        "skipInvalidSamples": { "type": "boolean" }
+      }
+    },
+    "model": {
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "architecture": { "type": "string" },
+        "pretrainedPath": { "type": ["string", "null"] },
+        "parameters": { "type": "object" }
+      }
+    },
+    "optimization": {
+      "type": "object",
+      "required": ["epochs", "batchSize", "learningRate"],
+      "properties": {
+        "epochs": { "type": "integer", "minimum": 1 },
+        "batchSize": { "type": "integer", "minimum": 1 },
+        "learningRate": { "type": "number", "exclusiveMinimum": 0 },
+        "seed": { "type": "integer" }
+      }
+    },
+    "runtime": { "type": "object" },
+    "output": { "type": "object" },
+    "logging": { "type": "object" },
+    "taskOptions": { "type": "object" }
+  }
+}

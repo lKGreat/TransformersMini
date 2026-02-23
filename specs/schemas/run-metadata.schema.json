@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://transformersmini.local/schemas/run-metadata.schema.json",
+  "title": "RunDetailDto",
+  "type": "object",
+  "required": ["runId", "runName", "task", "backend", "mode", "device", "status", "startedAt", "runDirectory", "configPath"],
+  "properties": {
+    "runId": { "type": "string" },
+    "runName": { "type": "string" },
+    "task": { "type": "string" },
+    "backend": { "type": "string" },
+    "mode": { "type": "string" },
+    "device": { "type": "string" },
+    "status": { "type": "string" },
+    "startedAt": { "type": "string", "format": "date-time" },
+    "endedAt": { "type": ["string", "null"], "format": "date-time" },
+    "runDirectory": { "type": "string" },
+    "configPath": { "type": "string" },
+    "message": { "type": ["string", "null"] },
+    "metrics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "step", "value", "timestamp"],
+        "properties": {
+          "name": { "type": "string" },
+          "step": { "type": "integer" },
+          "value": { "type": "number" },
+          "timestamp": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["level", "eventType", "message", "timestamp"],
+        "properties": {
+          "level": { "type": "string" },
+          "eventType": { "type": "string" },
+          "message": { "type": "string" },
+          "timestamp": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  }
+}

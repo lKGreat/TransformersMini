@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://transformersmini.local/schemas/ocr-manifest.schema.json",
+  "title": "OcrManifestLine",
+  "type": "object",
+  "required": ["id", "imagePath", "text"],
+  "properties": {
+    "id": { "type": "string" },
+    "imagePath": { "type": "string" },
+    "text": { "type": "string" },
+    "split": { "type": "string", "enum": ["train", "val", "validation", "test"] },
+    "lang": { "type": "string" },
+    "region": {
+      "type": ["object", "null"],
+      "properties": {
+        "x": { "type": "number" },
+        "y": { "type": "number" },
+        "w": { "type": "number" },
+        "h": { "type": "number" }
+      }
+    },
+    "meta": { "type": ["object", "null"] }
+  }
+}

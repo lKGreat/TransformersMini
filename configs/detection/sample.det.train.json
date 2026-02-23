@@ -1,0 +1,47 @@
+{
+  "configVersion": "1.0",
+  "runName": "det-sample-train",
+  "mode": "Train",
+  "task": "Detection",
+  "backend": "TorchSharp",
+  "device": "Auto",
+  "dataset": {
+    "format": "coco",
+    "rootPath": "data/samples/detection",
+    "annotationPath": "annotations/train.json",
+    "trainSplit": "train",
+    "valSplit": "val",
+    "testSplit": "test",
+    "skipInvalidSamples": false
+  },
+  "model": {
+    "name": "detector-mvp",
+    "architecture": "yolo-like",
+    "parameters": {
+      "inputSize": 640
+    }
+  },
+  "optimization": {
+    "epochs": 3,
+    "batchSize": 2,
+    "learningRate": 0.001,
+    "seed": 42
+  },
+  "runtime": {
+    "maxWorkers": 1,
+    "deterministic": true,
+    "saveCheckpoints": false,
+    "checkpointEveryEpochs": 1
+  },
+  "output": {
+    "baseRunDirectory": "runs",
+    "experimentGroup": "samples"
+  },
+  "logging": {
+    "level": "Information",
+    "writeJsonLogs": false
+  },
+  "taskOptions": {
+    "numClasses": 2
+  }
+}

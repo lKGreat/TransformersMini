@@ -1,0 +1,21 @@
+{
+  "configVersion": "1.0",
+  "runName": "ocr-sample-test",
+  "mode": "Test",
+  "task": "Ocr",
+  "backend": "TorchSharp",
+  "device": "Auto",
+  "dataset": {
+    "format": "ocr-manifest-v1",
+    "manifestPath": "data/samples/ocr/manifest.jsonl"
+  },
+  "model": {
+    "name": "ocr-mvp",
+    "architecture": "crnn-like"
+  },
+  "optimization": {
+    "epochs": 1,
+    "batchSize": 8,
+    "learningRate": 0.001
+  }
+}
