@@ -62,7 +62,19 @@ public sealed class InferenceWorkspaceControl : UserControl
         }), 0, 1);
         layout.Controls.Add(BuildLine("单图路径", _singleImagePath, "选择文件", () =>
         {
-            _shell.PickFile(_singleImagePath.Text, path => _singleImagePath.Text = path);
+            using var dlg = new OpenFileDialog
+            {
+                Title = "选择单图",
+                Filter = "图片文件 (*.png;*.jpg;*.jpeg;*.bmp;*.gif)|*.png;*.jpg;*.jpeg;*.bmp;*.gif|所有文件 (*.*)|*.*",
+                FileName = _singleImagePath.Text,
+                InitialDirectory = !string.IsNullOrWhiteSpace(_singleImagePath.Text) && File.Exists(_singleImagePath.Text)
+                    ? Path.GetDirectoryName(_singleImagePath.Text)
+                    : null
+            };
+            if (dlg.ShowDialog() == DialogResult.OK)
+            {
+                _singleImagePath.Text = dlg.FileName;
+            }
         }), 0, 2);
 
         var runLine = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
@@ -90,7 +102,7 @@ public sealed class InferenceWorkspaceControl : UserControl
         var desc = new Label
         {
             Dock = DockStyle.Fill,
-            Text = "说明：无弹框模式下所有路径通过内嵌文件选择器设置；结果在下方面板显示。",
+            Text = "说明：单图路径通过弹框选择；其他路径通过内嵌文件选择器设置；结果在下方面板显示。",
             AutoSize = true
         };
         layout.Controls.Add(desc, 0, 6);
@@ -98,12 +110,11 @@ public sealed class InferenceWorkspaceControl : UserControl
         var resultSplit = new SplitContainer
         {
             Dock = DockStyle.Fill,
-            Orientation = Orientation.Vertical,
-            Panel1MinSize = 420,
-            Panel2MinSize = 260
+            Orientation = Orientation.Vertical
         };
-        resultSplit.SizeChanged += (_, _) => EnsureValidSplitterDistance(resultSplit);
-        EnsureValidSplitterDistance(resultSplit);
+        // 中文说明：构造期 Width=0，设置 Panel*MinSize 会触发 ApplyPanel2MinSize 内部调整
+        // SplitterDistance 导致 InvalidOperationException，因此延迟到首次布局完成后设置。
+        resultSplit.SizeChanged += (_, _) => EnsureValidSplitterDistance(resultSplit, 420, 260);
         resultSplit.Panel1.Controls.Add(_resultText);
         resultSplit.Panel2.Controls.Add(_previewBox);
 
@@ -260,12 +271,19 @@ public sealed class InferenceWorkspaceControl : UserControl
 #endif
     }
 
-    private static void EnsureValidSplitterDistance(SplitContainer splitContainer)
+    private static void EnsureValidSplitterDistance(SplitContainer splitContainer, int min1, int min2)
     {
-        var min = splitContainer.Panel1MinSize;
-        var max = Math.Max(min, splitContainer.Width - splitContainer.Panel2MinSize);
-        var preferred = (int)(splitContainer.Width * 0.65);
-        splitContainer.SplitterDistance = Math.Clamp(preferred, min, max);
+        var total = splitContainer.Width;
+        // 中文说明：Width 为 0（构造期/折叠态）或空间不足时跳过，防止抛 InvalidOperationException。
+        if (total <= min1 + min2)
+        {
+            return;
+        }
+
+        splitContainer.Panel1MinSize = min1;
+        splitContainer.Panel2MinSize = min2;
+        var preferred = (int)(total * 0.65);
+        splitContainer.SplitterDistance = Math.Clamp(preferred, min1, total - min2);
     }
 
     private async Task RenderSinglePreviewAsync(RunResult result, bool singleMode)
