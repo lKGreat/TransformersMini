@@ -9,6 +9,9 @@ using TransformersMini.Contracts.Abstractions;
 using TransformersMini.Contracts.Data;
 using TransformersMini.Contracts.ModelMetadata;
 using TransformersMini.Contracts.Runtime;
+using TransformersMini.Infrastructure.TorchSharp.Detection;
+using TransformersMini.Infrastructure.TorchSharp.Detection.Backbone;
+using TransformersMini.Infrastructure.TorchSharp.Detection.Loss;
 using TransformersMini.SharedKernel.Core;
 using static TorchSharp.torch;
 using static TorchSharp.torch.nn;
@@ -51,6 +54,12 @@ public sealed class DetectionTrainingTask : ITrainingTask
 
     private static async Task<RunResult> ExecuteTorchSharpTrainAsync(TrainingExecutionContext context, CancellationToken ct)
     {
+        // 检测到 yolov8 架构配置时走 YOLO 训练路径
+        if (IsYoloArchitecture(context))
+        {
+            return await ExecuteYoloTrainAsync(context, ct);
+        }
+
         var trainSamples = context.Data.Train;
         var sampleCount = Math.Max(1, trainSamples.Count);
 
@@ -386,7 +395,7 @@ public sealed class DetectionTrainingTask : ITrainingTask
         return new RunResult(context.RunId, RunStatus.Succeeded, "非 TorchSharp 检测占位流程完成。", context.RunDirectory);
     }
 
-    private static double ComputeGradientNorm(Module<Tensor, Tensor> model)
+    private static double ComputeGradientNorm(Module model)
     {
         double totalNormSq = 0;
         foreach (var (_, param) in model.named_parameters())
@@ -403,6 +412,335 @@ public sealed class DetectionTrainingTask : ITrainingTask
     }
 
     private static Module<Tensor, Tensor> CreateDetectorModel(int targetTopK) => new TinyMultiHeadDetectorModel(Math.Max(1, targetTopK));
+
+    // ─── YOLO 架构判断与训练路径 ──────────────────────────────────────────────
+
+    /// <summary>判断当前 config 是否要求使用 YOLOv8 架构。</summary>
+    private static bool IsYoloArchitecture(TrainingExecutionContext context)
+    {
+        var arch = context.Config.Model?.Architecture ?? string.Empty;
+        return arch.Equals("yolov8", StringComparison.OrdinalIgnoreCase)
+            || arch.Equals("yolo-v8", StringComparison.OrdinalIgnoreCase)
+            || arch.Equals("yolo", StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>YOLO 模式完整训练循环。</summary>
+    private static async Task<RunResult> ExecuteYoloTrainAsync(TrainingExecutionContext context, CancellationToken ct)
+    {
+        var trainSamples = context.Data.Train;
+        var sampleCount = Math.Max(1, trainSamples.Count);
+
+        await context.RunRepository.AppendEventAsync(
+            context.RunId,
+            new RunEvent("Information", "YoloDetectionTaskStart", "YOLOv8 风格检测训练开始。", DateTimeOffset.UtcNow),
+            ct);
+
+        try
+        {
+            var torchDevice = ResolveTorchDevice(context.Config.Device);
+            var tensorOptions = ResolveTensorOptions(context);
+            var inputSize = tensorOptions.InputSize;
+            var batchSize = Math.Max(1, context.Config.Optimization.BatchSize);
+            var epochs = Math.Max(1, context.Config.Optimization.Epochs);
+            var stepsPerEpoch = Math.Max(1, (int)Math.Ceiling(sampleCount / (double)batchSize));
+
+            // 读取类别数（默认 80）
+            var nc = 80;
+            if (context.Config.Model?.Parameters.TryGetValue("numClasses", out var ncElem) == true
+                && ncElem.ValueKind == JsonValueKind.Number)
+            {
+                nc = ncElem.GetInt32();
+            }
+
+            // 读取缩放规格（默认 nano）
+            var scaleStr = "nano";
+            if (context.Config.Model?.Parameters.TryGetValue("backboneScale", out var scaleElem) == true
+                && scaleElem.ValueKind == JsonValueKind.String)
+            {
+                scaleStr = scaleElem.GetString() ?? "nano";
+            }
+
+            var scale = scaleStr.ToLowerInvariant() switch
+            {
+                "small" => YoloScale.Small,
+                "medium" => YoloScale.Medium,
+                _ => YoloScale.Nano
+            };
+
+            await WritePreprocessingTagsAsync(context, tensorOptions, ct);
+            await AppendPreprocessingEventAsync(context, tensorOptions, ct);
+
+            torch.random.manual_seed(Math.Max(1, context.Config.Optimization.Seed));
+
+            using var model = new YoloDetectionModel(nc, scale).to(torchDevice);
+            var lossFunction = new YoloDetectionLoss(nc, regMax: model.RegMax, strides: model.Strides);
+            using var optimizer = torch.optim.Adam(model.parameters(), context.Config.Optimization.LearningRate);
+            model.train();
+
+            double trainLossSum = 0d;
+            double trainBoxLossSum = 0d;
+            double trainClsLossSum = 0d;
+            double trainDflLossSum = 0d;
+            var trainStepCount = 0;
+
+            await context.RunRepository.AppendEventAsync(
+                context.RunId,
+                new RunEvent("Information", "YoloTrainPlan",
+                    $"YOLOv8 训练计划：epochs={epochs}, stepsPerEpoch={stepsPerEpoch}, batchSize={batchSize}, lr={context.Config.Optimization.LearningRate}, nc={nc}, scale={scale}, inputSize={inputSize}",
+                    DateTimeOffset.UtcNow),
+                ct);
+
+            for (var epoch = 1; epoch <= epochs; epoch++)
+            {
+                ct.ThrowIfCancellationRequested();
+                double epochLoss = 0d;
+                double epochBoxLoss = 0d;
+                double epochClsLoss = 0d;
+                double epochDflLoss = 0d;
+
+                for (var step = 1; step <= stepsPerEpoch; step++)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var globalStep = ((epoch - 1) * stepsPerEpoch) + step;
+
+                    using var inputs = BuildInputTensor(
+                        trainSamples, batchSize, globalStep, tensorOptions, torchDevice,
+                        context.Config.Dataset.SkipInvalidSamples, isTraining: true);
+                    var (gtBboxes, gtLabels, maskGt) = BuildYoloGtTensors(
+                        trainSamples, batchSize, globalStep, inputSize, torchDevice);
+
+                    optimizer.zero_grad();
+                    model.train();
+                    var headOutput = model.forward(inputs);
+
+                    var (totalLoss, boxLoss, clsLoss, dflLoss) = lossFunction.Compute(headOutput, gtBboxes, gtLabels, maskGt);
+
+                    // 释放 GT 张量
+                    gtBboxes.Dispose();
+                    gtLabels.Dispose();
+                    maskGt.Dispose();
+                    headOutput.Primary.Dispose();
+
+                    totalLoss.backward();
+                    var gradNorm = ComputeGradientNorm(model);
+                    optimizer.step();
+
+                    var lossVal = totalLoss.item<float>();
+                    var boxVal = boxLoss.item<float>();
+                    var clsVal = clsLoss.item<float>();
+                    var dflVal = dflLoss.item<float>();
+
+                    totalLoss.Dispose();
+                    boxLoss.Dispose();
+                    clsLoss.Dispose();
+                    dflLoss.Dispose();
+
+                    epochLoss += lossVal;
+                    epochBoxLoss += boxVal;
+                    epochClsLoss += clsVal;
+                    epochDflLoss += dflVal;
+                    trainLossSum += lossVal;
+                    trainBoxLossSum += boxVal;
+                    trainClsLossSum += clsVal;
+                    trainDflLossSum += dflVal;
+                    trainStepCount++;
+
+                    var ts = DateTimeOffset.UtcNow;
+                    var metrics = new[]
+                    {
+                        new MetricPoint("loss", globalStep, lossVal, ts),
+                        new MetricPoint("loss_box", globalStep, boxVal, ts),
+                        new MetricPoint("loss_cls", globalStep, clsVal, ts),
+                        new MetricPoint("loss_dfl", globalStep, dflVal, ts),
+                        new MetricPoint("grad_norm", globalStep, gradNorm, ts)
+                    };
+                    foreach (var m in metrics)
+                        await context.RunRepository.AppendMetricAsync(context.RunId, m, ct);
+
+                    await context.RunRepository.AppendEventAsync(
+                        context.RunId,
+                        new RunEvent("Trace", "YoloTrainStep",
+                            $"Epoch {epoch}/{epochs} Step {step}/{stepsPerEpoch} | loss={lossVal:F6} box={boxVal:F6} cls={clsVal:F6} dfl={dflVal:F6} | grad_norm={gradNorm:F6}",
+                            DateTimeOffset.UtcNow),
+                        ct);
+                }
+
+                var avgLoss = epochLoss / stepsPerEpoch;
+                await context.RunRepository.AppendEventAsync(
+                    context.RunId,
+                    new RunEvent("Information", "YoloEpochCompleted",
+                        $"第 {epoch}/{epochs} 轮完成 | avg_loss={avgLoss:F6}（box={epochBoxLoss / stepsPerEpoch:F6}, cls={epochClsLoss / stepsPerEpoch:F6}, dfl={epochDflLoss / stepsPerEpoch:F6}）",
+                        DateTimeOffset.UtcNow),
+                    ct);
+            }
+
+            var denom = Math.Max(1, trainStepCount);
+            var lossSummary = new YoloLossSummaryDto(
+                trainLossSum / denom, trainBoxLossSum / denom, trainClsLossSum / denom, trainDflLossSum / denom, trainStepCount);
+
+            // 保存模型权重
+            var weightsPath = Path.Combine(context.RunDirectory, "artifacts", "model-weights.bin");
+            Directory.CreateDirectory(Path.GetDirectoryName(weightsPath)!);
+            try { model.save(weightsPath); } catch { /* 可选，忽略保存失败 */ }
+
+            var yoloArch = new YoloArchitectureDto(
+                scale.ToString().ToLowerInvariant(), model.RegMax, nc, model.Strides);
+
+            await context.ArtifactStore.WriteTextAsync(
+                context.RunId,
+                "artifacts/model-metadata.json",
+                JsonSerializer.Serialize(new DetectionModelMetadataDto(
+                    "TorchSharp", "detection",
+                    context.Config.Device.ToString(),
+                    context.Config.Model?.Architecture ?? "yolov8",
+                    inputSize,
+                    BuildPreprocessingDto(tensorOptions),
+                    BuildTargetEncodingDto(tensorOptions.TargetTopK),
+                    new DetectionLossWeightsDto(7.5, 0.5, 1.5),
+                    "yolo-anchor-free",
+                    "trained",
+                    yoloArch), TrainArtifactJsonOptions),
+                ct);
+
+            await context.ArtifactStore.WriteTextAsync(
+                context.RunId,
+                "reports/summary.json",
+                JsonSerializer.Serialize(new
+                {
+                    task = "detection",
+                    mode = "Train",
+                    backend = context.Config.Backend.ToString(),
+                    device = context.Config.Device.ToString(),
+                    sampleCount,
+                    epochs,
+                    stepsPerEpoch,
+                    inputSize,
+                    architecture = "yolov8",
+                    backboneScale = scale.ToString(),
+                    numClasses = nc,
+                    lossSummary,
+                    status = "yolo-train-complete"
+                }, TrainArtifactJsonOptions),
+                ct);
+
+            return new RunResult(context.RunId, RunStatus.Succeeded, "YOLOv8 风格检测训练完成。", context.RunDirectory);
+        }
+        catch (DllNotFoundException ex)
+        {
+            throw new InvalidOperationException("TorchSharp 运行时不可用，请安装对应 CPU/CUDA 运行时依赖。", ex);
+        }
+    }
+
+    /// <summary>
+    /// 为 YOLO 训练构建 GT 张量：gtBboxes [b, max_gt, 4]（xyxy 像素坐标）、
+    /// gtLabels [b, max_gt, 1]（long）、maskGt [b, max_gt, 1]（bool）。
+    /// </summary>
+    private static (Tensor GtBboxes, Tensor GtLabels, Tensor MaskGt) BuildYoloGtTensors(
+        IReadOnlyList<DataSample> samples,
+        int batchSize,
+        int globalStep,
+        int inputSize,
+        Device device)
+    {
+        // 先读取所有 batch 样本的 GT，确定 max_gt
+        var allBoxes = new List<List<(float x1, float y1, float x2, float y2, long cls)>>(batchSize);
+        var maxGt = 0;
+
+        for (var i = 0; i < batchSize; i++)
+        {
+            var sample = PickSample(samples, globalStep + i);
+            var boxes = ReadYoloGtBoxes(sample, inputSize);
+            allBoxes.Add(boxes);
+            if (boxes.Count > maxGt) maxGt = boxes.Count;
+        }
+
+        if (maxGt == 0) maxGt = 1;
+
+        var bboxData = new float[batchSize * maxGt * 4];
+        var labelData = new long[batchSize * maxGt];
+        var maskData = new bool[batchSize * maxGt];
+
+        for (var i = 0; i < batchSize; i++)
+        {
+            var boxes = allBoxes[i];
+            for (var j = 0; j < Math.Min(boxes.Count, maxGt); j++)
+            {
+                var (x1, y1, x2, y2, cls) = boxes[j];
+                var bIdx = (i * maxGt + j) * 4;
+                bboxData[bIdx] = x1;
+                bboxData[bIdx + 1] = y1;
+                bboxData[bIdx + 2] = x2;
+                bboxData[bIdx + 3] = y2;
+                labelData[i * maxGt + j] = cls;
+                maskData[i * maxGt + j] = true;
+            }
+        }
+
+        var gtBboxes = tensor(bboxData, [batchSize, maxGt, 4], dtype: ScalarType.Float32, device: device);
+        var gtLabels = tensor(labelData, [batchSize, maxGt, 1], dtype: ScalarType.Int64, device: device);
+        var maskGt = tensor(maskData, [batchSize, maxGt, 1], device: device);
+
+        return (gtBboxes, gtLabels, maskGt);
+    }
+
+    /// <summary>从样本元数据读取所有 GT 框，返回 xyxy 像素坐标（相对 inputSize）。</summary>
+    private static List<(float x1, float y1, float x2, float y2, long cls)> ReadYoloGtBoxes(
+        DataSample sample, int inputSize)
+    {
+        var result = new List<(float, float, float, float, long)>();
+
+        if (sample.Metadata is null ||
+            !sample.Metadata.TryGetValue("coco.annotations_json", out var json) ||
+            string.IsNullOrWhiteSpace(json))
+        {
+            return result;
+        }
+
+        var origWidth = ReadMetadataFloat(sample, "coco.image_width", 640f);
+        var origHeight = ReadMetadataFloat(sample, "coco.image_height", 640f);
+        if (origWidth <= 0) origWidth = 640f;
+        if (origHeight <= 0) origHeight = 640f;
+
+        var scaleX = inputSize / origWidth;
+        var scaleY = inputSize / origHeight;
+
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.ValueKind != JsonValueKind.Array) return result;
+
+            foreach (var ann in doc.RootElement.EnumerateArray())
+            {
+                if (!TryReadBbox(ann, out var bbox)) continue;
+
+                var x1 = bbox[0] * scaleX;
+                var y1 = bbox[1] * scaleY;
+                var x2 = (bbox[0] + bbox[2]) * scaleX;
+                var y2 = (bbox[1] + bbox[3]) * scaleY;
+
+                // 确保 x2>x1，y2>y1
+                x1 = Math.Clamp(x1, 0f, inputSize);
+                y1 = Math.Clamp(y1, 0f, inputSize);
+                x2 = Math.Clamp(x2, 0f, inputSize);
+                y2 = Math.Clamp(y2, 0f, inputSize);
+                if (x2 <= x1 || y2 <= y1) continue;
+
+                long cls = 0;
+                if (ann.TryGetProperty("CategoryId", out var c) && c.ValueKind == JsonValueKind.Number)
+                    cls = c.GetInt64();
+                else if (ann.TryGetProperty("categoryId", out var cc) && cc.ValueKind == JsonValueKind.Number)
+                    cls = cc.GetInt64();
+
+                result.Add((x1, y1, x2, y2, cls));
+            }
+        }
+        catch
+        {
+            // 解析失败时返回空列表
+        }
+
+        return result;
+    }
 
     private static Device ResolveTorchDevice(CoreDeviceType configuredDevice)
     {

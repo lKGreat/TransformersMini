@@ -7,6 +7,7 @@
   <ItemGroup>
     <ProjectReference Include="..\TransformersMini.Contracts\TransformersMini.Contracts.csproj" />
     <ProjectReference Include="..\TransformersMini.SharedKernel\TransformersMini.SharedKernel.csproj" />
+    <ProjectReference Include="..\TransformersMini.Infrastructure.TorchSharp\TransformersMini.Infrastructure.TorchSharp.csproj" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="TorchSharp" />

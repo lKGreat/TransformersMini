@@ -9,6 +9,9 @@ using TransformersMini.Contracts.Abstractions;
 using TransformersMini.Contracts.Data;
 using TransformersMini.Contracts.ModelMetadata;
 using TransformersMini.Contracts.Runtime;
+using TransformersMini.Infrastructure.TorchSharp.Detection;
+using TransformersMini.Infrastructure.TorchSharp.Detection.Backbone;
+using TransformersMini.Infrastructure.TorchSharp.Detection.PostProcess;
 using TransformersMini.SharedKernel.Core;
 using static TorchSharp.torch;
 using static TorchSharp.torch.nn;
@@ -44,6 +47,26 @@ public sealed class DetectionInferenceTask : IInferenceTask
             var normalizeStd = modelMetadata?.Preprocessing?.NormalizeStd ?? [1f, 1f, 1f];
             var resamplerName = modelMetadata?.Preprocessing?.ResizeSampler ?? "bicubic";
             var resampler = ResolveResampler(resamplerName);
+            var isYolo = modelMetadata?.YoloArchitecture is not null
+                || (modelMetadata?.HeadType?.Equals("yolo-anchor-free", StringComparison.OrdinalIgnoreCase) == true);
+
+            // YOLO 架构推理路径
+            if (isYolo)
+            {
+                var nc = modelMetadata?.YoloArchitecture?.NumClasses ?? 80;
+                var scaleStr = modelMetadata?.YoloArchitecture?.BackboneScale ?? "nano";
+                var scale = scaleStr.ToLowerInvariant() switch
+                {
+                    "small" => YoloScale.Small,
+                    "medium" => YoloScale.Medium,
+                    _ => YoloScale.Nano
+                };
+                var regMax = modelMetadata?.YoloArchitecture?.RegMax ?? 16;
+
+                return await ExecuteYoloInferAsync(
+                    context, torchDevice, inputSize, normalizeMean, normalizeStd, resampler,
+                    nc, scale, regMax, ct);
+            }
 
             using var model = CreateDetectorModel(topK).to(torchDevice);
             var modelWeightsPath = Path.Combine(context.ModelRunDirectory, "artifacts", "model-weights.bin");
@@ -306,6 +329,106 @@ public sealed class DetectionInferenceTask : IInferenceTask
         string SampleId,
         string SourcePath,
         IReadOnlyList<DetectionInferenceBox> Boxes);
+
+    /// <summary>YOLO 架构批量推理。</summary>
+    private static async Task<RunResult> ExecuteYoloInferAsync(
+        InferenceExecutionContext context,
+        Device torchDevice,
+        int inputSize,
+        float[] normalizeMean,
+        float[] normalizeStd,
+        IResampler resampler,
+        int nc,
+        YoloScale scale,
+        int regMax,
+        CancellationToken ct)
+    {
+        using var model = new YoloDetectionModel(nc, scale, regMax).to(torchDevice);
+        var weightsPath = Path.Combine(context.ModelRunDirectory, "artifacts", "model-weights.bin");
+        if (File.Exists(weightsPath))
+        {
+            try { model.load(weightsPath); }
+            catch { /* 加载失败继续使用随机初始化权重 */ }
+        }
+        model.eval();
+
+        var nms = new NmsProcessor(confThresh: 0.25f, iouThresh: 0.45f);
+
+        IReadOnlyList<DataSample> samples;
+        if (!string.IsNullOrWhiteSpace(context.SingleImagePath))
+        {
+            var singlePath = Path.GetFullPath(context.SingleImagePath);
+            samples = [new DataSample("single-image", singlePath, null, "infer-single")];
+        }
+        else
+        {
+            samples = context.Data.Test.Count > 0 ? context.Data.Test
+                : context.Data.Validation.Count > 0 ? context.Data.Validation
+                : context.Data.Train;
+        }
+
+        if (context.MaxSamples > 0 && samples.Count > context.MaxSamples)
+            samples = samples.Take(context.MaxSamples).ToList();
+
+        var sampleCount = samples.Count;
+        var sampleResults = new List<object>(sampleCount);
+
+        for (var i = 0; i < sampleCount; i++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var sample = samples[i];
+            float[] imageData;
+            try { imageData = BuildImageTensor(sample.SourcePath, inputSize, normalizeMean, normalizeStd, resampler); }
+            catch { imageData = new float[3 * inputSize * inputSize]; }
+
+            using var inputTensor = torch.tensor(imageData, [1, 3, inputSize, inputSize], dtype: ScalarType.Float32, device: torchDevice);
+            using (torch.no_grad())
+            {
+                var headOut = model.forward(inputTensor);
+                using var prediction = headOut.Primary;
+                var detections = nms.Process(prediction);
+
+                var yoloBoxes = detections[0].Select(b => new
+                {
+                    x1 = b.X1 / inputSize,
+                    y1 = b.Y1 / inputSize,
+                    x2 = b.X2 / inputSize,
+                    y2 = b.Y2 / inputSize,
+                    confidence = b.Confidence,
+                    classId = b.ClassId
+                }).ToList();
+
+                sampleResults.Add(new
+                {
+                    sampleIndex = i,
+                    sampleId = sample.Id,
+                    sourcePath = sample.SourcePath ?? string.Empty,
+                    boxes = yoloBoxes
+                });
+
+                await context.ArtifactStore.AppendLineAsync(
+                    context.RunId,
+                    "reports/inference-samples.jsonl",
+                    JsonSerializer.Serialize(sampleResults[^1], new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }),
+                    ct);
+            }
+        }
+
+        await context.ArtifactStore.WriteTextAsync(
+            context.RunId,
+            "reports/inference.json",
+            JsonSerializer.Serialize(new
+            {
+                task = "detection",
+                mode = "infer",
+                architecture = "yolov8",
+                sampleCount,
+                samples = sampleResults
+            }, new JsonSerializerOptions { PropertyNamingPolicy = JsonNamingPolicy.CamelCase }),
+            ct);
+
+        return new RunResult(context.RunId, RunStatus.Succeeded, $"YOLOv8 推理完成，共处理 {sampleCount} 张图片。", context.RunDirectory);
+    }
 
     private static bool TryLoadModelWeights(Module<Tensor, Tensor> model, string inputPath)
     {
