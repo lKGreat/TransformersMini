@@ -70,11 +70,24 @@ public sealed class OcrTrainingTask : ITrainingTask
             var batchSize = Math.Max(1, context.Config.Optimization.BatchSize);
             var epochs = Math.Max(1, context.Config.Optimization.Epochs);
             var stepsPerEpoch = Math.Max(1, (int)Math.Ceiling(sampleCount / (double)batchSize));
+            var lr = context.Config.Optimization.LearningRate;
+            double trainGradNormSum = 0d;
+            var trainStepCount = 0;
+
+            await context.RunRepository.AppendEventAsync(
+                context.RunId,
+                new RunEvent("Information", "TrainPlan",
+                    $"训练计划：epochs={epochs}, stepsPerEpoch={stepsPerEpoch}, batchSize={batchSize}, lr={lr}, samples={sampleCount}, inputH={options.InputHeight}, inputW={options.InputWidth}",
+                    DateTimeOffset.UtcNow),
+                ct);
 
             for (var epoch = 1; epoch <= epochs; epoch++)
             {
                 ct.ThrowIfCancellationRequested();
                 double epochLoss = 0;
+                double epochGradNormSum = 0d;
+                double epochGradNormMin = double.MaxValue;
+                double epochGradNormMax = 0d;
 
                 for (var step = 1; step <= stepsPerEpoch; step++)
                 {
@@ -88,24 +101,45 @@ public sealed class OcrTrainingTask : ITrainingTask
                     using var logits = model.forward(inputTensor);
                     using var loss = lossFunction.forward(logits, targetTensor);
                     loss.backward();
+
+                    var gradNorm = ComputeGradientNorm(model);
+
                     optimizer.step();
 
                     var lossValue = loss.ToDouble();
                     epochLoss += lossValue;
+                    epochGradNormSum += gradNorm;
+                    epochGradNormMin = Math.Min(epochGradNormMin, gradNorm);
+                    epochGradNormMax = Math.Max(epochGradNormMax, gradNorm);
+                    trainGradNormSum += gradNorm;
+                    trainStepCount++;
                     var timestamp = DateTimeOffset.UtcNow;
 
                     await context.RunRepository.AppendMetricAsync(context.RunId, new MetricPoint("ocr_loss", globalStep, lossValue, timestamp), ct);
+                    await context.RunRepository.AppendMetricAsync(context.RunId, new MetricPoint("grad_norm", globalStep, gradNorm, timestamp), ct);
                     await context.ArtifactStore.AppendLineAsync(
                         context.RunId,
                         "metrics.jsonl",
-                        JsonSerializer.Serialize(new OcrMetricStreamEntry("ocr_loss", globalStep, lossValue)),
+                        JsonSerializer.Serialize(new OcrTrainMetricStreamEntry(globalStep, epoch, lossValue, gradNorm)),
+                        ct);
+
+                    await context.RunRepository.AppendEventAsync(
+                        context.RunId,
+                        new RunEvent("Trace", "TrainStep",
+                            $"Epoch {epoch}/{epochs} Step {step}/{stepsPerEpoch} (global={globalStep}) | ocr_loss={lossValue:F6} | grad_norm={gradNorm:F6}",
+                            DateTimeOffset.UtcNow),
                         ct);
                 }
 
                 var avgLoss = epochLoss / stepsPerEpoch;
+                var avgGradNorm = epochGradNormSum / stepsPerEpoch;
+                if (epochGradNormMin == double.MaxValue) epochGradNormMin = 0d;
+
                 await context.RunRepository.AppendEventAsync(
                     context.RunId,
-                    new RunEvent("Information", "OcrEpochCompleted", $"第 {epoch} 轮完成，平均损失 {avgLoss:F6}", DateTimeOffset.UtcNow),
+                    new RunEvent("Information", "OcrEpochCompleted",
+                        $"第 {epoch}/{epochs} 轮完成 | avg_loss={avgLoss:F6} | grad_norm: avg={avgGradNorm:F6} min={epochGradNormMin:F6} max={epochGradNormMax:F6}",
+                        DateTimeOffset.UtcNow),
                     ct);
             }
 
@@ -245,6 +279,22 @@ public sealed class OcrTrainingTask : ITrainingTask
             ct);
 
         return new RunResult(context.RunId, RunStatus.Succeeded, "非 TorchSharp OCR 占位流程完成。", context.RunDirectory);
+    }
+
+    private static double ComputeGradientNorm(Module<Tensor, Tensor> model)
+    {
+        double totalNormSq = 0;
+        foreach (var (_, param) in model.named_parameters())
+        {
+            var grad = param.grad;
+            if (grad is null) continue;
+            // 中文说明：避免 norm(2) 被解析为 dim=2 重载，先展平再求 L2，确保得到标量。
+            using var gradFlat = grad.flatten();
+            using var normTensor = TorchSharp.torch.linalg.vector_norm(gradFlat, ord: 2.0);
+            var n = normTensor.ToDouble();
+            totalNormSq += n * n;
+        }
+        return Math.Sqrt(totalNormSq);
     }
 
     private static Module<Tensor, Tensor> CreateTinyOcrModel(OcrTensorOptions options)
@@ -717,6 +767,7 @@ public sealed class OcrTrainingTask : ITrainingTask
     }
 
     private sealed record OcrMetricStreamEntry(string Metric, long Step, double Value);
+    private sealed record OcrTrainMetricStreamEntry(long Step, int Epoch, double Loss, double GradNorm);
 
     private static OcrTensorOptionsDto BuildOptionsDto(OcrTensorOptions options) =>
         new(options.InputHeight, options.InputWidth, options.MaxTextLength, options.Charset.Length, options.ResamplerName);

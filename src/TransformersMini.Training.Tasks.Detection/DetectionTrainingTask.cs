@@ -80,7 +80,16 @@ public sealed class DetectionTrainingTask : ITrainingTask
             double trainBboxLossSum = 0d;
             double trainCategoryLossSum = 0d;
             double trainObjectnessLossSum = 0d;
+            double trainGradNormSum = 0d;
             var trainStepCount = 0;
+
+            var lr = context.Config.Optimization.LearningRate;
+            await context.RunRepository.AppendEventAsync(
+                context.RunId,
+                new RunEvent("Information", "TrainPlan",
+                    $"训练计划：epochs={epochs}, stepsPerEpoch={stepsPerEpoch}, batchSize={batchSize}, lr={lr}, samples={sampleCount}, inputSize={inputSize}",
+                    DateTimeOffset.UtcNow),
+                ct);
 
             for (var epoch = 1; epoch <= epochs; epoch++)
             {
@@ -89,6 +98,9 @@ public sealed class DetectionTrainingTask : ITrainingTask
                 double epochBboxLoss = 0d;
                 double epochCategoryLoss = 0d;
                 double epochObjectnessLoss = 0d;
+                double epochGradNormSum = 0d;
+                double epochGradNormMin = double.MaxValue;
+                double epochGradNormMax = 0d;
 
                 for (var step = 1; step <= stepsPerEpoch; step++)
                 {
@@ -110,6 +122,9 @@ public sealed class DetectionTrainingTask : ITrainingTask
                     using var lossBreakdown = ComputeDetectionTrainLoss(prediction, targets, batchSize, tensorOptions.TargetTopK);
                     using var loss = lossBreakdown.TotalLoss;
                     loss.backward();
+
+                    var gradNorm = ComputeGradientNorm(model);
+
                     optimizer.step();
 
                     var lossValue = loss.ToDouble();
@@ -120,10 +135,14 @@ public sealed class DetectionTrainingTask : ITrainingTask
                     epochBboxLoss += bboxLossValue;
                     epochCategoryLoss += categoryLossValue;
                     epochObjectnessLoss += objectnessLossValue;
+                    epochGradNormSum += gradNorm;
+                    epochGradNormMin = Math.Min(epochGradNormMin, gradNorm);
+                    epochGradNormMax = Math.Max(epochGradNormMax, gradNorm);
                     trainLossSum += lossValue;
                     trainBboxLossSum += bboxLossValue;
                     trainCategoryLossSum += categoryLossValue;
                     trainObjectnessLossSum += objectnessLossValue;
+                    trainGradNormSum += gradNorm;
                     trainStepCount++;
                     var metricTimestamp = DateTimeOffset.UtcNow;
 
@@ -132,7 +151,8 @@ public sealed class DetectionTrainingTask : ITrainingTask
                         new MetricPoint("loss", globalStep, lossValue, metricTimestamp),
                         new MetricPoint("loss_bbox", globalStep, bboxLossValue, metricTimestamp),
                         new MetricPoint("loss_category", globalStep, categoryLossValue, metricTimestamp),
-                        new MetricPoint("loss_objectness", globalStep, objectnessLossValue, metricTimestamp)
+                        new MetricPoint("loss_objectness", globalStep, objectnessLossValue, metricTimestamp),
+                        new MetricPoint("grad_norm", globalStep, gradNorm, metricTimestamp)
                     };
 
                     foreach (var metric in trainMetrics)
@@ -149,7 +169,15 @@ public sealed class DetectionTrainingTask : ITrainingTask
                             lossValue,
                             bboxLossValue,
                             categoryLossValue,
-                            objectnessLossValue)),
+                            objectnessLossValue,
+                            gradNorm)),
+                        ct);
+
+                    await context.RunRepository.AppendEventAsync(
+                        context.RunId,
+                        new RunEvent("Trace", "TrainStep",
+                            $"Epoch {epoch}/{epochs} Step {step}/{stepsPerEpoch} (global={globalStep}) | loss={lossValue:F6} bbox={bboxLossValue:F6} cls={categoryLossValue:F6} obj={objectnessLossValue:F6} | grad_norm={gradNorm:F6}",
+                            DateTimeOffset.UtcNow),
                         ct);
                 }
 
@@ -157,12 +185,15 @@ public sealed class DetectionTrainingTask : ITrainingTask
                 var avgEpochBboxLoss = epochBboxLoss / stepsPerEpoch;
                 var avgEpochCategoryLoss = epochCategoryLoss / stepsPerEpoch;
                 var avgEpochObjectnessLoss = epochObjectnessLoss / stepsPerEpoch;
+                var avgGradNorm = epochGradNormSum / stepsPerEpoch;
+                if (epochGradNormMin == double.MaxValue) epochGradNormMin = 0d;
+
                 await context.RunRepository.AppendEventAsync(
                     context.RunId,
                     new RunEvent(
                         "Information",
                         "EpochCompleted",
-                        $"第 {epoch} 轮完成，平均损失 {avgLoss:F6}（bbox={avgEpochBboxLoss:F6}, cls={avgEpochCategoryLoss:F6}, obj={avgEpochObjectnessLoss:F6}）",
+                        $"第 {epoch}/{epochs} 轮完成 | avg_loss={avgLoss:F6}（bbox={avgEpochBboxLoss:F6}, cls={avgEpochCategoryLoss:F6}, obj={avgEpochObjectnessLoss:F6}）| grad_norm: avg={avgGradNorm:F6} min={epochGradNormMin:F6} max={epochGradNormMax:F6}",
                         DateTimeOffset.UtcNow),
                     ct);
             }
@@ -353,6 +384,22 @@ public sealed class DetectionTrainingTask : ITrainingTask
             }),
             ct);
         return new RunResult(context.RunId, RunStatus.Succeeded, "非 TorchSharp 检测占位流程完成。", context.RunDirectory);
+    }
+
+    private static double ComputeGradientNorm(Module<Tensor, Tensor> model)
+    {
+        double totalNormSq = 0;
+        foreach (var (_, param) in model.named_parameters())
+        {
+            var grad = param.grad;
+            if (grad is null) continue;
+            // 中文说明：避免 norm(2) 被解析为 dim=2 重载，先展平再求 L2，确保得到标量。
+            using var gradFlat = grad.flatten();
+            using var normTensor = TorchSharp.torch.linalg.vector_norm(gradFlat, ord: 2.0);
+            var n = normTensor.ToDouble();
+            totalNormSq += n * n;
+        }
+        return Math.Sqrt(totalNormSq);
     }
 
     private static Module<Tensor, Tensor> CreateDetectorModel(int targetTopK) => new TinyMultiHeadDetectorModel(Math.Max(1, targetTopK));
@@ -1115,7 +1162,8 @@ public sealed class DetectionTrainingTask : ITrainingTask
         double Loss,
         double BboxLoss,
         double CategoryLoss,
-        double ObjectnessLoss);
+        double ObjectnessLoss,
+        double GradNorm);
 
     private static DetectionPreprocessingDto BuildPreprocessingDto(DetectionTensorOptions options) =>
         new(options.InputSize, options.NormalizeMean, options.NormalizeStd, options.ResamplerName, options.TargetBoxStrategy);

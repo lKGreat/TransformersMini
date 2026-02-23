@@ -90,7 +90,6 @@ public sealed partial class TrainingSetupPanel : UserControl
 
     private void btnBrowseAnnotation_Click(object sender, EventArgs e)
     {
-        // 兼容旧习惯：保留经典文件浏览弹框交互。
         using var dialog = new OpenFileDialog
         {
             Filter = "标注文件 (*.json;*.jsonl;*.txt)|*.json;*.jsonl;*.txt|所有文件 (*.*)|*.*",
@@ -109,7 +108,6 @@ public sealed partial class TrainingSetupPanel : UserControl
 
     private void btnBrowseImageRoot_Click(object sender, EventArgs e)
     {
-        // 兼容旧习惯：保留经典目录选择弹框交互。
         using var dialog = new FolderBrowserDialog
         {
             Description = "选择图像根目录",
@@ -157,7 +155,6 @@ public sealed partial class TrainingSetupPanel : UserControl
         }
         catch
         {
-            // 中文说明：自动识别失败不影响手工选择格式。
         }
     }
 
@@ -189,7 +186,10 @@ public sealed partial class TrainingSetupPanel : UserControl
                 DryRun = chkDryRun.Checked
             }, CancellationToken.None);
 
-            txtDetails.Text = $"Started run: {runId}\r\nTempConfig: {configPath}";
+            var startTime = DateTime.Now.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+            txtDetails.Text = $"[{startTime}] 已提交运行：{runId}\r\n" +
+                $"临时配置：{configPath}\r\n" +
+                $"正在轮询运行状态与事件流，请稍候...\r\n";
             _shell.ShowInfo($"已提交运行：{runId}");
             await RefreshRunsAsync();
             _ = MonitorRunCompletionAsync(runId);
@@ -348,32 +348,47 @@ public sealed partial class TrainingSetupPanel : UserControl
     private static string BuildRunDetailText(RunDetailDto detail)
     {
         var sb = new StringBuilder();
+        sb.AppendLine("=== 运行详情与完备日志 ===");
         sb.AppendLine($"RunId: {detail.RunId}");
         sb.AppendLine($"Status: {detail.Status}");
         sb.AppendLine($"Task/Backend/Mode: {detail.Task}/{detail.Backend}/{detail.Mode}");
         sb.AppendLine($"Device: {detail.Device}");
         sb.AppendLine($"Config: {detail.ConfigPath}");
         sb.AppendLine($"RunDir: {detail.RunDirectory}");
-        sb.AppendLine($"Message: {detail.Message}");
+        sb.AppendLine($"Message: {detail.Message ?? "-"}");
         sb.AppendLine();
-        sb.AppendLine("Latest Metrics:");
+
+        sb.AppendLine("--- 事件流（发生了什么，按时间顺序） ---");
+        foreach (var evt in detail.Events.OrderBy(x => x.Timestamp))
+        {
+            var timeStr = evt.Timestamp.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture);
+            sb.AppendLine($"[{timeStr}] [{evt.Level}] {evt.EventType}");
+            sb.AppendLine($"  {evt.Message}");
+        }
+        if (detail.Events.Count == 0)
+        {
+            sb.AppendLine("  （暂无事件记录）");
+        }
+        sb.AppendLine();
+
+        sb.AppendLine("--- 最新指标 ---");
         foreach (var metric in detail.LatestMetrics.OrderBy(x => x.Name))
         {
-            sb.AppendLine($"- {metric.Name} step={metric.Step} value={metric.Value}");
+            sb.AppendLine($"  {metric.Name}: step={metric.Step} value={metric.Value:0.######}");
         }
-
         sb.AppendLine();
-        sb.AppendLine("Tags:");
+
+        sb.AppendLine("--- 标签 ---");
         foreach (var tag in detail.Tags.OrderBy(x => x.Key))
         {
-            sb.AppendLine($"- {tag.Key} = {tag.Value}");
+            sb.AppendLine($"  {tag.Key} = {tag.Value}");
         }
-
         sb.AppendLine();
-        sb.AppendLine("Artifacts:");
+
+        sb.AppendLine("--- 产物 ---");
         foreach (var artifact in detail.Artifacts.OrderByDescending(x => x.UpdatedAt).Take(40))
         {
-            sb.AppendLine($"- [{artifact.Kind}] {artifact.Path} ({artifact.SizeBytes} bytes)");
+            sb.AppendLine($"  [{artifact.Kind}] {artifact.Path} ({artifact.SizeBytes} bytes)");
         }
 
         return sb.ToString();
@@ -436,45 +451,62 @@ public sealed partial class TrainingSetupPanel : UserControl
 
     private async Task MonitorRunCompletionAsync(string runId)
     {
-        // 中文说明：后台轮询运行状态，持续刷新最近事件/指标，避免“只看到启动日志”的困惑。
-        for (var i = 0; i < 300; i++)
+        var nullCount = 0;
+        for (var i = 0; i < 600; i++)
         {
-            await Task.Delay(1000);
-            var detail = await _runControl.GetRunAsync(runId, CancellationToken.None);
-            if (detail is null)
+            await Task.Delay(i == 0 ? 300 : 1000);
+
+            RunDetailDto? detail;
+            try
+            {
+                detail = await _runControl.GetRunAsync(runId, CancellationToken.None);
+            }
+            catch
             {
                 continue;
             }
 
+            if (detail is null)
+            {
+                nullCount++;
+                if (nullCount >= 10)
+                {
+                    txtDetails.Text =
+                        $"[诊断] 运行 {runId} 在数据库中未找到（已查询 {nullCount} 次）。\r\n" +
+                        "可能原因：编排器在注册 run 前即已异常退出。\r\n" +
+                        "请查看控制台/日志窗口确认具体错误信息。";
+                }
+                continue;
+            }
+
+            nullCount = 0;
             var status = detail.Status ?? string.Empty;
-            if (string.Equals(status, "Running", StringComparison.OrdinalIgnoreCase) ||
-                string.Equals(status, "Pending", StringComparison.OrdinalIgnoreCase))
+            var isTerminal = !string.Equals(status, "Running", StringComparison.OrdinalIgnoreCase)
+                          && !string.Equals(status, "Pending", StringComparison.OrdinalIgnoreCase);
+
+            if (!isTerminal)
             {
                 txtDetails.Text = BuildLiveProgressText(detail);
+                continue;
             }
 
-            if (!string.Equals(status, "Running", StringComparison.OrdinalIgnoreCase) &&
-                !string.Equals(status, "Pending", StringComparison.OrdinalIgnoreCase))
+            txtDetails.Text = BuildRunDetailText(detail);
+            if (string.Equals(status, "Succeeded", StringComparison.OrdinalIgnoreCase))
             {
-                if (string.Equals(status, "Succeeded", StringComparison.OrdinalIgnoreCase))
-                {
-                    var modelPath = Path.Combine(detail.RunDirectory, "artifacts", "model-metadata.json");
-                    var reportPath = Path.Combine(detail.RunDirectory, "reports", "summary.json");
-                    var artifactHint = File.Exists(modelPath)
-                        ? $"模型产物：{modelPath}"
-                        : $"未检测到模型元数据，建议检查报告：{reportPath}";
-                    txtDetails.Text = $"RunId: {detail.RunId}\r\nStatus: {detail.Status}\r\nRunDir: {detail.RunDirectory}\r\n{artifactHint}";
-                    _shell.ShowInfo($"训练完成：{detail.RunId}。{artifactHint}");
-                }
-                else
-                {
-                    txtDetails.Text = $"RunId: {detail.RunId}\r\nStatus: {detail.Status}\r\nMessage: {detail.Message}\r\nRunDir: {detail.RunDirectory}";
-                    _shell.ShowError($"运行结束：{detail.Status}，{detail.Message}");
-                }
-
-                await RefreshRunsAsync();
-                return;
+                var runDir = detail.RunDirectory ?? string.Empty;
+                var modelPath = Path.Combine(runDir, "artifacts", "model-metadata.json");
+                var artifactHint = File.Exists(modelPath)
+                    ? $"模型产物：{modelPath}"
+                    : $"RunDir: {runDir}";
+                _shell.ShowInfo($"训练完成：{detail.RunId}。{artifactHint}");
             }
+            else
+            {
+                _shell.ShowError($"运行结束：{detail.Status}，{detail.Message}");
+            }
+
+            await RefreshRunsAsync();
+            return;
         }
 
         _shell.ShowWarning($"运行 {runId} 仍在执行，请在运行列表中继续观察。");
@@ -483,24 +515,30 @@ public sealed partial class TrainingSetupPanel : UserControl
     private static string BuildLiveProgressText(RunDetailDto detail)
     {
         var sb = new StringBuilder();
-        sb.AppendLine($"RunId: {detail.RunId}");
-        sb.AppendLine($"Status: {detail.Status}");
-        sb.AppendLine($"Task/Backend/Mode: {detail.Task}/{detail.Backend}/{detail.Mode}");
+        sb.AppendLine("=== 运行日志（实时） ===");
+        sb.AppendLine($"RunId: {detail.RunId} | Status: {detail.Status}");
+        sb.AppendLine($"Task: {detail.Task} | Backend: {detail.Backend} | Mode: {detail.Mode}");
         sb.AppendLine($"RunDir: {detail.RunDirectory}");
         sb.AppendLine();
 
-        var latestEvent = detail.Events.OrderByDescending(x => x.Timestamp).FirstOrDefault();
-        if (latestEvent is not null)
+        sb.AppendLine("--- 事件流（按时间顺序） ---");
+        var events = detail.Events.OrderBy(x => x.Timestamp).ToList();
+        var displayCount = Math.Min(events.Count, 25);
+        foreach (var evt in events.TakeLast(displayCount))
         {
-            sb.AppendLine($"Latest Event: [{latestEvent.Level}] {latestEvent.EventType}");
-            sb.AppendLine(latestEvent.Message);
-            sb.AppendLine();
+            var timeStr = evt.Timestamp.ToString("HH:mm:ss", CultureInfo.InvariantCulture);
+            sb.AppendLine($"[{timeStr}] [{evt.Level}] {evt.EventType}: {evt.Message}");
         }
-
-        sb.AppendLine("Latest Metrics:");
-        foreach (var metric in detail.LatestMetrics.OrderBy(x => x.Name).Take(8))
+        if (events.Count > displayCount)
         {
-            sb.AppendLine($"- {metric.Name} step={metric.Step} value={metric.Value:0.######}");
+            sb.AppendLine($"... 共 {events.Count} 条事件，仅显示最近 {displayCount} 条");
+        }
+        sb.AppendLine();
+
+        sb.AppendLine("--- 最新指标 ---");
+        foreach (var metric in detail.LatestMetrics.OrderBy(x => x.Name).Take(10))
+        {
+            sb.AppendLine($"  {metric.Name}: step={metric.Step} value={metric.Value:0.######}");
         }
 
         return sb.ToString();
@@ -538,7 +576,6 @@ public sealed partial class TrainingSetupPanel : UserControl
         }
         catch
         {
-            // 中文说明：清理失败不影响主流程。
         }
     }
 }

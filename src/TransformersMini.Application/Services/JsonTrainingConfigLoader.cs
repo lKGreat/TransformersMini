@@ -33,8 +33,11 @@ public sealed class JsonTrainingConfigLoader : ITrainingConfigLoader
         }
 
         var rawJson = await File.ReadAllTextAsync(command.ConfigPath, ct);
-        var schemaPath = ResolveTrainingConfigSchemaPath(command.ConfigPath);
-        _schemaValidator.Validate(rawJson, schemaPath);
+        var schemaPath = TryResolveTrainingConfigSchemaPath(command.ConfigPath);
+        if (schemaPath is not null)
+        {
+            _schemaValidator.Validate(rawJson, schemaPath);
+        }
 
         var config = JsonSerializer.Deserialize<TrainingConfig>(rawJson, JsonOptions)
             ?? throw new InvalidOperationException("Failed to deserialize training config.");
@@ -58,7 +61,7 @@ public sealed class JsonTrainingConfigLoader : ITrainingConfigLoader
         return (config, JsonSerializer.Serialize(config, JsonOptions));
     }
 
-    private static string ResolveTrainingConfigSchemaPath(string configPath)
+    private static string? TryResolveTrainingConfigSchemaPath(string configPath)
     {
         var candidates = new[]
         {
@@ -92,7 +95,7 @@ public sealed class JsonTrainingConfigLoader : ITrainingConfigLoader
             current = parent.FullName;
         }
 
-        throw new FileNotFoundException("未找到 training-config.schema.json。");
+        return null;
     }
 
     private static void ValidateConfig(TrainingConfig config)
