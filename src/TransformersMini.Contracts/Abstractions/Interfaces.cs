@@ -77,3 +77,29 @@ public interface ISystemProbe
 {
     bool IsCudaAvailable();
 }
+
+/// <summary>
+/// 运行查询仓库接口，支持多维度过滤，替代逐条 GetAsync 扫描。
+/// </summary>
+public interface IRunQueryRepository
+{
+    /// <summary>按过滤条件分页查询运行列表。</summary>
+    Task<RunQueryResult> QueryAsync(RunQueryFilter filter, CancellationToken ct);
+}
+
+/// <summary>
+/// 推理编排器入口：接受推理命令并执行完整推理流程。
+/// </summary>
+public interface IInferenceOrchestrator
+{
+    Task<RunResult> ExecuteAsync(RunInferenceCommand command, CancellationToken ct);
+}
+
+/// <summary>
+/// 具体任务推理实现（检测/OCR 各自实现此接口）。
+/// </summary>
+public interface IInferenceTask
+{
+    TaskType TaskType { get; }
+    Task<RunResult> ExecuteAsync(InferenceExecutionContext context, CancellationToken ct);
+}

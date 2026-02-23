@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Text.Json;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
@@ -7,6 +7,7 @@ using SixLabors.ImageSharp.Processing.Processors.Transforms;
 using TorchSharp;
 using TransformersMini.Contracts.Abstractions;
 using TransformersMini.Contracts.Data;
+using TransformersMini.Contracts.ModelMetadata;
 using TransformersMini.Contracts.Runtime;
 using TransformersMini.SharedKernel.Core;
 using static TorchSharp.torch;
@@ -166,13 +167,13 @@ public sealed class DetectionTrainingTask : ITrainingTask
             }
 
             var denominator = Math.Max(1, trainStepCount);
-            var trainLossSummary = new DetectionTrainLossSummarySnapshot(
+            var trainLossSummary = new DetectionLossSummaryDto(
                 trainLossSum / denominator,
                 trainBboxLossSum / denominator,
                 trainCategoryLossSum / denominator,
                 trainObjectnessLossSum / denominator,
                 trainStepCount);
-            var lossWeights = new DetectionLossWeightsSnapshot(
+            var lossWeights = new DetectionLossWeightsDto(
                 DetectionBboxLossWeight,
                 DetectionCategoryLossWeight,
                 DetectionObjectnessLossWeight);
@@ -180,14 +181,14 @@ public sealed class DetectionTrainingTask : ITrainingTask
             await context.ArtifactStore.WriteTextAsync(
                 context.RunId,
                 "artifacts/model-metadata.json",
-                JsonSerializer.Serialize(new DetectionTrainModelMetadataReport(
+                JsonSerializer.Serialize(new DetectionModelMetadataDto(
                     "TorchSharp",
                     "detection",
                     context.Config.Device.ToString(),
                     string.IsNullOrWhiteSpace(context.Config.Model.Architecture) ? "tiny-cnn-detector-multihead" : context.Config.Model.Architecture,
                     inputSize,
-                    DetectionPreprocessingSnapshot.FromTensorOptions(tensorOptions),
-                    DetectionTargetEncodingSnapshot.FromTopK(tensorOptions.TargetTopK),
+                    BuildPreprocessingDto(tensorOptions),
+                    BuildTargetEncodingDto(tensorOptions.TargetTopK),
                     lossWeights,
                     "multi-branch",
                     "trained"), TrainArtifactJsonOptions),
@@ -196,7 +197,7 @@ public sealed class DetectionTrainingTask : ITrainingTask
             await context.ArtifactStore.WriteTextAsync(
                 context.RunId,
                 "reports/summary.json",
-                JsonSerializer.Serialize(new DetectionTrainSummaryReport(
+                JsonSerializer.Serialize(new DetectionTrainSummaryDto(
                     "detection",
                     "Train",
                     context.Config.Backend.ToString(),
@@ -205,8 +206,8 @@ public sealed class DetectionTrainingTask : ITrainingTask
                     epochs,
                     stepsPerEpoch,
                     inputSize,
-                    DetectionPreprocessingSnapshot.FromTensorOptions(tensorOptions),
-                    DetectionTargetEncodingSnapshot.FromTopK(tensorOptions.TargetTopK),
+                    BuildPreprocessingDto(tensorOptions),
+                    BuildTargetEncodingDto(tensorOptions.TargetTopK),
                     lossWeights,
                     trainLossSummary,
                     "multi-branch",
@@ -274,15 +275,15 @@ public sealed class DetectionTrainingTask : ITrainingTask
             await context.ArtifactStore.WriteTextAsync(
                 context.RunId,
                 $"reports/{stage}.json",
-                JsonSerializer.Serialize(new DetectionEvalReport(
+                JsonSerializer.Serialize(new DetectionEvalReportDto(
                     "detection",
                     stage,
                     "TorchSharp",
                     context.Config.Device.ToString(),
                     sampleCount,
                     inputSize,
-                    DetectionPreprocessingSnapshot.FromTensorOptions(tensorOptions),
-                    DetectionTargetEncodingSnapshot.FromTopK(tensorOptions.TargetTopK),
+                    BuildPreprocessingDto(tensorOptions),
+                    BuildTargetEncodingDto(tensorOptions.TargetTopK),
                     "approx-iou-pr",
                     evalMetrics,
                     evalResult.SampleDetails,
@@ -694,7 +695,7 @@ public sealed class DetectionTrainingTask : ITrainingTask
         var truePositive = 0;
         var falsePositive = 0;
         var falseNegative = 0;
-        var sampleDetails = new List<ApproxDetectionEvalSampleDetail>(sampleCount);
+        var sampleDetails = new List<DetectionEvalSampleDetailDto>(sampleCount);
 
         for (var sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++)
         {
@@ -764,10 +765,10 @@ public sealed class DetectionTrainingTask : ITrainingTask
             }
 
             var selectedSample = PickSample(samples, sampleIndex + 1);
-            sampleDetails.Add(new ApproxDetectionEvalSampleDetail(
+            sampleDetails.Add(new DetectionEvalSampleDetailDto(
                 sampleIndex,
                 selectedSample.Id,
-                selectedSample.SourcePath,
+                selectedSample.SourcePath ?? string.Empty,
                 predictedPositive.Count,
                 targetPositive.Count,
                 sampleTruePositive,
@@ -786,7 +787,7 @@ public sealed class DetectionTrainingTask : ITrainingTask
             ? totalMatchedIou / matchedCount
             : 0d;
 
-        var metrics = new ApproxDetectionEvalMetrics(
+        var metrics = new DetectionEvalMetricsDto(
             MeanIou: meanIou,
             PrecisionAtIou50: precision,
             RecallAtIou50: recall,
@@ -1090,97 +1091,15 @@ public sealed class DetectionTrainingTask : ITrainingTask
         double CategoryLoss,
         double ObjectnessLoss);
 
-    private sealed record DetectionLossWeightsSnapshot(
-        double Bbox,
-        double Category,
-        double Objectness);
+    private static DetectionPreprocessingDto BuildPreprocessingDto(DetectionTensorOptions options) =>
+        new(options.InputSize, options.NormalizeMean, options.NormalizeStd, options.ResamplerName, options.TargetBoxStrategy);
 
-    private sealed record DetectionTrainLossSummarySnapshot(
-        double AverageTotalLoss,
-        double AverageBboxLoss,
-        double AverageCategoryLoss,
-        double AverageObjectnessLoss,
-        int TrainStepCount);
-
-    private sealed record DetectionTrainModelMetadataReport(
-        string Framework,
-        string Task,
-        string Device,
-        string Model,
-        int InputSize,
-        DetectionPreprocessingSnapshot Preprocessing,
-        DetectionTargetEncodingSnapshot TargetEncoding,
-        DetectionLossWeightsSnapshot LossWeights,
-        string HeadType,
-        string Status);
-
-    private sealed record DetectionTrainSummaryReport(
-        string Task,
-        string Mode,
-        string Backend,
-        string Device,
-        int SampleCount,
-        int Epochs,
-        int StepsPerEpoch,
-        int InputSize,
-        DetectionPreprocessingSnapshot Preprocessing,
-        DetectionTargetEncodingSnapshot TargetEncoding,
-        DetectionLossWeightsSnapshot LossWeights,
-        DetectionTrainLossSummarySnapshot LossSummary,
-        string HeadType,
-        string Status);
-
-    private sealed record DetectionPreprocessingSnapshot(
-        int InputSize,
-        float[] NormalizeMean,
-        float[] NormalizeStd,
-        string ResizeSampler,
-        string TargetBoxStrategy)
-    {
-        public static DetectionPreprocessingSnapshot FromTensorOptions(DetectionTensorOptions options) =>
-            new(
-                options.InputSize,
-                options.NormalizeMean,
-                options.NormalizeStd,
-                options.ResamplerName,
-                options.TargetBoxStrategy);
-    }
-
-    private sealed record DetectionTargetEncodingSnapshot(
-        int TopK,
-        int ValuesPerBox,
-        int FlattenedSize)
-    {
-        public static DetectionTargetEncodingSnapshot FromTopK(int topK) =>
-            new(
-                topK,
-                DetectionTargetBoxValueCount,
-                topK * DetectionTargetBoxValueCount);
-    }
-
-    private sealed record ApproxDetectionEvalMetrics(
-        double MeanIou,
-        double PrecisionAtIou50,
-        double RecallAtIou50,
-        int TruePositive,
-        int FalsePositive,
-        int FalseNegative,
-        float IouThreshold);
-
-    private sealed record ApproxDetectionEvalSampleDetail(
-        int SampleIndex,
-        string SampleId,
-        string SourcePath,
-        int PredictedPositiveCount,
-        int TargetPositiveCount,
-        int TruePositive,
-        int FalsePositive,
-        int FalseNegative,
-        double MeanMatchedIou);
+    private static DetectionTargetEncodingDto BuildTargetEncodingDto(int topK) =>
+        new(topK, DetectionTargetBoxValueCount, topK * DetectionTargetBoxValueCount);
 
     private sealed record ApproxDetectionEvalComputationResult(
-        ApproxDetectionEvalMetrics Metrics,
-        IReadOnlyList<ApproxDetectionEvalSampleDetail> SampleDetails);
+        DetectionEvalMetricsDto Metrics,
+        IReadOnlyList<DetectionEvalSampleDetailDto> SampleDetails);
 
     private sealed record DetectionTrainLossBreakdown(
         Tensor TotalLoss,
@@ -1197,19 +1116,6 @@ public sealed class DetectionTrainingTask : ITrainingTask
         }
     }
 
-    private sealed record DetectionEvalReport(
-        string Task,
-        string Mode,
-        string Backend,
-        string Device,
-        int SampleCount,
-        int InputSize,
-        DetectionPreprocessingSnapshot Preprocessing,
-        DetectionTargetEncodingSnapshot TargetEncoding,
-        string MetricType,
-        ApproxDetectionEvalMetrics Metrics,
-        IReadOnlyList<ApproxDetectionEvalSampleDetail> SampleDetails,
-        string Status);
 
     private sealed class TinyMultiHeadDetectorModel : Module<Tensor, Tensor>
     {

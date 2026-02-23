@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection;
 using TransformersMini.Contracts.Abstractions;
 using TransformersMini.Contracts.Runtime;
 using TransformersMini.Infrastructure.DependencyInjection;
@@ -14,7 +14,24 @@ if (args.Length == 0 || args[0] is "--help" or "-h")
     return;
 }
 
-var (command, runCommand) = ParseArgs(args);
+var command = args[0].ToLowerInvariant();
+
+// infer 命令单独处理
+if (command == "infer")
+{
+    var inferCommand = ParseInferArgs(args);
+    var sysProbe = provider.GetRequiredService<ISystemProbe>();
+    ValidateBuildModeAndDeviceForCli(inferCommand.ForcedDevice, sysProbe);
+    var inferOrchestrator = provider.GetRequiredService<IInferenceOrchestrator>();
+    var inferResult = await inferOrchestrator.ExecuteAsync(inferCommand, CancellationToken.None);
+    Console.WriteLine($"RunId: {inferResult.RunId}");
+    Console.WriteLine($"Status: {inferResult.Status}");
+    Console.WriteLine($"Message: {inferResult.Message}");
+    Console.WriteLine($"RunDir: {inferResult.RunDirectory}");
+    return;
+}
+
+var (_, runCommand) = ParseArgs(args);
 runCommand = new RunTrainingCommand
 {
     ConfigPath = runCommand.ConfigPath,
@@ -44,7 +61,7 @@ Console.WriteLine($"RunDir: {result.RunDirectory}");
 
 static (string Command, RunTrainingCommand RunCommand) ParseArgs(string[] args)
 {
-    var command = args[0].ToLowerInvariant();
+    var cmd = args[0].ToLowerInvariant();
     var configPath = string.Empty;
     var dryRun = false;
     string? runName = null;
@@ -79,13 +96,67 @@ static (string Command, RunTrainingCommand RunCommand) ParseArgs(string[] args)
         throw new InvalidOperationException("--config <path> is required.");
     }
 
-    return (command, new RunTrainingCommand
+    return (cmd, new RunTrainingCommand
     {
         ConfigPath = configPath,
         DryRun = dryRun,
         RequestedRunName = runName,
         ForcedDevice = device
     });
+}
+
+static RunInferenceCommand ParseInferArgs(string[] args)
+{
+    var configPath = string.Empty;
+    var modelRunDirectory = string.Empty;
+    string? runName = null;
+    DeviceType? device = null;
+    var maxSamples = 0;
+
+    for (var i = 1; i < args.Length; i++)
+    {
+        switch (args[i])
+        {
+            case "--config":
+                configPath = args[++i];
+                break;
+            case "--model-run-dir":
+                modelRunDirectory = args[++i];
+                break;
+            case "--run-name":
+                runName = args[++i];
+                break;
+            case "--device":
+                device = args[++i].ToLowerInvariant() switch
+                {
+                    "cpu" => DeviceType.Cpu,
+                    "cuda" => DeviceType.Cuda,
+                    _ => DeviceType.Auto
+                };
+                break;
+            case "--max-samples":
+                if (int.TryParse(args[++i], out var ms))
+                {
+                    maxSamples = ms;
+                }
+
+                break;
+        }
+    }
+
+    if (string.IsNullOrWhiteSpace(configPath))
+    {
+        throw new InvalidOperationException("infer --config <path> is required.");
+    }
+
+    return new RunInferenceCommand
+    {
+        ConfigPath = configPath,
+        ModelRunDirectory = modelRunDirectory,
+        RequestedRunName = runName,
+        ForcedDevice = device,
+        MaxSamples = maxSamples
+    };
 }
 
 static void PrintHelp()
@@ -96,6 +167,7 @@ static void PrintHelp()
     Console.WriteLine("  train --config <path> [--dry-run]");
     Console.WriteLine("  validate --config <path> [--dry-run]");
     Console.WriteLine("  test --config <path> [--dry-run]");
+    Console.WriteLine("  infer --config <path> [--model-run-dir <dir>] [--device cpu|cuda|auto] [--max-samples <n>] [--run-name <name>]");
 }
 
 static void ValidateBuildModeAndDeviceForCli(DeviceType? forcedDevice, ISystemProbe systemProbe)

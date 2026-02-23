@@ -4,7 +4,9 @@ public enum RunMode
 {
     Train,
     Validate,
-    Test
+    Test,
+    /// <summary>推理模式，区别于训练/验证/测试。</summary>
+    Infer
 }
 
 public enum TaskType

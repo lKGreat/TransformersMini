@@ -1,0 +1,14 @@
+{
+  "framework": "TorchSharp",
+  "task": "ocr",
+  "device": "Cpu",
+  "model": "tiny-ocr-cnn",
+  "options": {
+    "inputHeight": 32,
+    "inputWidth": 128,
+    "maxTextLength": 16,
+    "charsetSize": 36,
+    "resizeSampler": "bicubic"
+  },
+  "status": "trained"
+}

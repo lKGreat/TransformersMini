@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "OcrModelMetadata",
+  "description": "OCR 模型训练产物 artifacts/model-metadata.json 的 JSON Schema",
+  "type": "object",
+  "required": ["framework", "task", "device", "model", "options", "status"],
+  "additionalProperties": true,
+  "properties": {
+    "framework": { "type": "string", "minLength": 1 },
+    "task": { "type": "string", "enum": ["ocr"] },
+    "device": { "type": "string", "minLength": 1 },
+    "model": { "type": "string", "minLength": 1 },
+    "options": {
+      "type": "object",
+      "required": ["inputHeight", "inputWidth", "maxTextLength", "charsetSize", "resizeSampler"],
+      "properties": {
+        "inputHeight": { "type": "integer", "minimum": 1 },
+        "inputWidth": { "type": "integer", "minimum": 1 },
+        "maxTextLength": { "type": "integer", "minimum": 1 },
+        "charsetSize": { "type": "integer", "minimum": 1 },
+        "resizeSampler": { "type": "string", "minLength": 1 }
+      }
+    },
+    "status": { "type": "string", "minLength": 1 }
+  }
+}

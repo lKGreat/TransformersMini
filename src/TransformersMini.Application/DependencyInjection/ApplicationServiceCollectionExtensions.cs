@@ -10,6 +10,7 @@ public static class ApplicationServiceCollectionExtensions
     {
         services.AddSingleton<ITrainingConfigLoader, JsonTrainingConfigLoader>();
         services.AddSingleton<ITrainingOrchestrator, TrainingOrchestrator>();
+        services.AddSingleton<IInferenceOrchestrator, InferenceOrchestrator>();
         services.AddSingleton<IRunControlService, RunControlService>();
         return services;
     }

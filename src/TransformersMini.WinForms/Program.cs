@@ -16,7 +16,9 @@ internal static class Program
         using var provider = services.BuildServiceProvider();
         var runControl = provider.GetRequiredService<IRunControlService>();
         var systemProbe = provider.GetRequiredService<ISystemProbe>();
+        var inferenceOrchestrator = provider.GetRequiredService<IInferenceOrchestrator>();
+        var runQueryRepository = provider.GetRequiredService<IRunQueryRepository>();
 
-        System.Windows.Forms.Application.Run(new MainForm(runControl, systemProbe));
+        System.Windows.Forms.Application.Run(new MainForm(runControl, systemProbe, inferenceOrchestrator, runQueryRepository));
     }
 }

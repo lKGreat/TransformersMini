@@ -1,0 +1,26 @@
+{
+  "framework": "TorchSharp",
+  "task": "detection",
+  "device": "Cpu",
+  "model": "tiny-cnn-detector-multihead",
+  "inputSize": 640,
+  "preprocessing": {
+    "inputSize": 640,
+    "normalizeMean": [0.0, 0.0, 0.0],
+    "normalizeStd": [1.0, 1.0, 1.0],
+    "resizeSampler": "bicubic",
+    "targetBoxStrategy": "largest"
+  },
+  "targetEncoding": {
+    "topK": 8,
+    "valuesPerBox": 6,
+    "flattenedSize": 48
+  },
+  "lossWeights": {
+    "bbox": 1.0,
+    "category": 0.5,
+    "objectness": 1.0
+  },
+  "headType": "multi-branch",
+  "status": "trained"
+}

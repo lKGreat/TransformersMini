@@ -32,6 +32,10 @@ public static class PlatformServiceCollectionExtensions
         services.AddSingleton<ITrainingTask, DetectionTrainingTask>();
         services.AddSingleton<ITrainingTask, OcrTrainingTask>();
 
+        // 推理任务实现注册
+        services.AddSingleton<IInferenceTask, DetectionInferenceTask>();
+        services.AddSingleton<IInferenceTask, OcrInferenceTask>();
+
         return services;
     }
 }

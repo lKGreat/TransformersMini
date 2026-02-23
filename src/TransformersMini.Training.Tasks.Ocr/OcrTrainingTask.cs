@@ -1,4 +1,4 @@
-﻿using System.Globalization;
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using SixLabors.ImageSharp;
@@ -8,6 +8,7 @@ using SixLabors.ImageSharp.Processing.Processors.Transforms;
 using TorchSharp;
 using TransformersMini.Contracts.Abstractions;
 using TransformersMini.Contracts.Data;
+using TransformersMini.Contracts.ModelMetadata;
 using TransformersMini.Contracts.Runtime;
 using TransformersMini.SharedKernel.Core;
 using static TorchSharp.torch;
@@ -113,19 +114,19 @@ public sealed class OcrTrainingTask : ITrainingTask
             await context.ArtifactStore.WriteTextAsync(
                 context.RunId,
                 "artifacts/model-metadata.json",
-                JsonSerializer.Serialize(new OcrModelMetadataReport(
+                JsonSerializer.Serialize(new OcrModelMetadataDto(
                     "TorchSharp",
                     "ocr",
                     context.Config.Device.ToString(),
                     string.IsNullOrWhiteSpace(context.Config.Model.Architecture) ? "tiny-ocr-cnn" : context.Config.Model.Architecture,
-                    OcrTensorOptionsSnapshot.FromOptions(options),
+                    BuildOptionsDto(options),
                     "trained")),
                 ct);
 
             await context.ArtifactStore.WriteTextAsync(
                 context.RunId,
                 "reports/summary.json",
-                JsonSerializer.Serialize(new OcrTrainSummaryReport(
+                JsonSerializer.Serialize(new OcrTrainSummaryDto(
                     "ocr",
                     "Train",
                     context.Config.Backend.ToString(),
@@ -133,8 +134,8 @@ public sealed class OcrTrainingTask : ITrainingTask
                     sampleCount,
                     Math.Max(1, context.Config.Optimization.Epochs),
                     Math.Max(1, (int)Math.Ceiling(sampleCount / (double)Math.Max(1, context.Config.Optimization.BatchSize))),
-                    OcrTensorOptionsSnapshot.FromOptions(options),
-                    trainMetrics,
+                    BuildOptionsDto(options),
+                    BuildEvalMetricsDto(trainMetrics),
                     "torchsharp-ocr-train-complete")),
                 ct);
 
@@ -167,15 +168,15 @@ public sealed class OcrTrainingTask : ITrainingTask
             await context.ArtifactStore.WriteTextAsync(
                 context.RunId,
                 $"reports/{stage}.json",
-                JsonSerializer.Serialize(new OcrEvalReport(
+                JsonSerializer.Serialize(new OcrEvalReportDto(
                     "ocr",
                     stage,
                     "TorchSharp",
                     context.Config.Device.ToString(),
                     Math.Max(1, samples.Count),
-                    OcrTensorOptionsSnapshot.FromOptions(options),
+                    BuildOptionsDto(options),
                     "approx-ocr-char-seq",
-                    evalMetrics,
+                    BuildEvalMetricsDto(evalMetrics),
                     "torchsharp-ocr-eval-complete")),
                 ct);
 
@@ -201,18 +202,19 @@ public sealed class OcrTrainingTask : ITrainingTask
         var reportName = context.Config.Mode == RunMode.Train
             ? "reports/summary.json"
             : $"reports/{context.Config.Mode.ToString().ToLowerInvariant()}.json";
+        var stubOptions = ResolveOptions(context);
         await context.ArtifactStore.WriteTextAsync(
             context.RunId,
             reportName,
-            JsonSerializer.Serialize(new OcrEvalReport(
+            JsonSerializer.Serialize(new OcrEvalReportDto(
                 "ocr",
                 context.Config.Mode.ToString(),
                 context.Config.Backend.ToString(),
                 context.Config.Device.ToString(),
                 0,
-                OcrTensorOptionsSnapshot.FromOptions(ResolveOptions(context)),
+                BuildOptionsDto(stubOptions),
                 "stub",
-                new OcrEvalMetrics(0.25, 0.5, 0, 0, 0),
+                BuildEvalMetricsDto(new OcrEvalMetrics(0.25, 0.5, 0, 0, 0)),
                 "stub-complete")),
             ct);
 
@@ -688,40 +690,13 @@ public sealed class OcrTrainingTask : ITrainingTask
         public int OutputDimension => MaxTextLength * VocabularySize;
     }
 
-    private sealed record OcrEvalMetrics(double Cer, double Wer, int ExactMatchCount, int SampleCount, int MaxTextLength);
-
     private sealed record OcrMetricStreamEntry(string Metric, long Step, double Value);
 
-    private sealed record OcrPreprocessingSnapshot(int InputHeight, int InputWidth, int MaxTextLength, string Charset, string ResizeSampler);
+    private static OcrTensorOptionsDto BuildOptionsDto(OcrTensorOptions options) =>
+        new(options.InputHeight, options.InputWidth, options.MaxTextLength, options.Charset.Length, options.ResamplerName);
 
-    private sealed record OcrModelMetadataReport(string Framework, string Task, string Device, string Model, OcrTensorOptionsSnapshot Options, string Status);
+    private static OcrEvalMetricsDto BuildEvalMetricsDto(OcrEvalMetrics metrics) =>
+        new(metrics.Cer, metrics.Wer, metrics.ExactMatchCount, metrics.SampleCount, metrics.MaxTextLength);
 
-    private sealed record OcrTrainSummaryReport(
-        string Task,
-        string Mode,
-        string Backend,
-        string Device,
-        int SampleCount,
-        int Epochs,
-        int StepsPerEpoch,
-        OcrTensorOptionsSnapshot Options,
-        OcrEvalMetrics Metrics,
-        string Status);
-
-    private sealed record OcrEvalReport(
-        string Task,
-        string Mode,
-        string Backend,
-        string Device,
-        int SampleCount,
-        OcrTensorOptionsSnapshot Options,
-        string MetricType,
-        OcrEvalMetrics Metrics,
-        string Status);
-
-    private sealed record OcrTensorOptionsSnapshot(int InputHeight, int InputWidth, int MaxTextLength, int CharsetSize, string ResizeSampler)
-    {
-        public static OcrTensorOptionsSnapshot FromOptions(OcrTensorOptions options) =>
-            new(options.InputHeight, options.InputWidth, options.MaxTextLength, options.Charset.Length, options.ResamplerName);
-    }
+    private sealed record OcrEvalMetrics(double Cer, double Wer, int ExactMatchCount, int SampleCount, int MaxTextLength);
 }

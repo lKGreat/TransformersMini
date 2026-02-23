@@ -1,4 +1,4 @@
-﻿using System.Text;
+using System.Text;
 using System.Text.Json;
 using TransformersMini.Contracts.Abstractions;
 using TransformersMini.Contracts.Runtime;
@@ -10,6 +10,8 @@ public sealed class MainForm : Form
 {
     private readonly IRunControlService _runControl;
     private readonly ISystemProbe _systemProbe;
+    private readonly IInferenceOrchestrator _inferenceOrchestrator;
+    private readonly IRunQueryRepository _runQueryRepository;
     private readonly TextBox _configPathText = new() { Dock = DockStyle.Top, PlaceholderText = "Config path..." };
     private readonly ComboBox _modeCombo = new() { Dock = DockStyle.Top, DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly ComboBox _deviceCombo = new() { Dock = DockStyle.Top, DropDownStyle = ComboBoxStyle.DropDownList };
@@ -20,6 +22,8 @@ public sealed class MainForm : Form
     private readonly Button _startButton = new() { Text = "Start" };
     private readonly Button _cancelButton = new() { Text = "Cancel Selected" };
     private readonly Button _refreshButton = new() { Text = "Refresh" };
+    private readonly Button _batchInferButton = new() { Text = "批量推理..." };
+    private readonly Button _singleInferButton = new() { Text = "单图推理..." };
     private readonly TextBox _tagFilterKeyText = new() { Width = 260, PlaceholderText = "Tag Key (e.g. det.preprocess.target_box_strategy)" };
     private readonly TextBox _tagFilterValueText = new() { Width = 170, PlaceholderText = "Tag Value" };
     private readonly Button _applyFilterButton = new() { Text = "Apply Filter" };
@@ -29,10 +33,12 @@ public sealed class MainForm : Form
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1500 };
     private bool _isRefreshing;
 
-    public MainForm(IRunControlService runControl, ISystemProbe systemProbe)
+    public MainForm(IRunControlService runControl, ISystemProbe systemProbe, IInferenceOrchestrator inferenceOrchestrator, IRunQueryRepository runQueryRepository)
     {
         _runControl = runControl;
         _systemProbe = systemProbe;
+        _inferenceOrchestrator = inferenceOrchestrator;
+        _runQueryRepository = runQueryRepository;
         Text = "TransformersMini Training Workbench";
         Width = 1200;
         Height = 820;
@@ -52,7 +58,7 @@ public sealed class MainForm : Form
             FlowDirection = FlowDirection.LeftToRight,
             WrapContents = false
         };
-        topPanel.Controls.AddRange([_browseButton, _startButton, _cancelButton, _refreshButton, _tagFilterKeyText, _tagFilterValueText, _applyFilterButton, _clearFilterButton]);
+        topPanel.Controls.AddRange([_browseButton, _startButton, _cancelButton, _refreshButton, _batchInferButton, _singleInferButton, _tagFilterKeyText, _tagFilterValueText, _applyFilterButton, _clearFilterButton]);
 
         var configPanel = new Panel { Dock = DockStyle.Top, Height = 82 };
         _configPathText.Top = 6;
@@ -83,6 +89,16 @@ public sealed class MainForm : Form
         _startButton.Click += StartButton_Click;
         _cancelButton.Click += CancelButton_Click;
         _refreshButton.Click += async (_, _) => await RefreshRunsAsync();
+        _batchInferButton.Click += (_, _) =>
+        {
+            var form = new BatchInferenceForm(_inferenceOrchestrator, _systemProbe);
+            form.Show(this);
+        };
+        _singleInferButton.Click += (_, _) =>
+        {
+            var form = new SingleImageInferenceForm(_inferenceOrchestrator);
+            form.Show(this);
+        };
         _applyFilterButton.Click += async (_, _) => await RefreshRunsAsync();
         _clearFilterButton.Click += async (_, _) =>
         {
@@ -172,46 +188,33 @@ public sealed class MainForm : Form
         _isRefreshing = true;
         try
         {
-            var runs = await _runControl.ListRunsAsync(CancellationToken.None);
-            var filteredRuns = await ApplyTagFiltersAsync(runs);
-            _runsGrid.DataSource = filteredRuns.ToList();
+            var tagKeyFilter = (_tagFilterKeyText.Text ?? string.Empty).Trim();
+            var tagValueFilter = (_tagFilterValueText.Text ?? string.Empty).Trim();
+
+            // 使用查询仓库替代逐条 GetRunAsync 扫描，避免 O(n) 详情加载
+            try
+            {
+                var filter = new RunQueryFilter
+                {
+                    TagKey = string.IsNullOrWhiteSpace(tagKeyFilter) ? null : tagKeyFilter,
+                    TagValue = string.IsNullOrWhiteSpace(tagValueFilter) ? null : tagValueFilter,
+                    Limit = 200,
+                    OrderBy = "started_at desc"
+                };
+                var queryResult = await _runQueryRepository.QueryAsync(filter, CancellationToken.None);
+                _runsGrid.DataSource = queryResult.Items.ToList();
+            }
+            catch
+            {
+                // 查询仓库不可用时（如 DB 文件尚未创建），fallback 到原始列表
+                var runs = await _runControl.ListRunsAsync(CancellationToken.None);
+                _runsGrid.DataSource = runs.ToList();
+            }
         }
         finally
         {
             _isRefreshing = false;
         }
-    }
-
-    private async Task<IReadOnlyList<RunSummaryDto>> ApplyTagFiltersAsync(IReadOnlyList<RunSummaryDto> runs)
-    {
-        var tagKeyFilter = (_tagFilterKeyText.Text ?? string.Empty).Trim();
-        var tagValueFilter = (_tagFilterValueText.Text ?? string.Empty).Trim();
-
-        if (string.IsNullOrWhiteSpace(tagKeyFilter) && string.IsNullOrWhiteSpace(tagValueFilter))
-        {
-            return runs;
-        }
-
-        var result = new List<RunSummaryDto>(runs.Count);
-        foreach (var run in runs)
-        {
-            var detail = await _runControl.GetRunAsync(run.RunId, CancellationToken.None);
-            if (detail is null)
-            {
-                continue;
-            }
-
-            var matched = detail.Tags.Any(tag =>
-                (string.IsNullOrWhiteSpace(tagKeyFilter) || tag.Key.Contains(tagKeyFilter, StringComparison.OrdinalIgnoreCase)) &&
-                (string.IsNullOrWhiteSpace(tagValueFilter) || tag.Value.Contains(tagValueFilter, StringComparison.OrdinalIgnoreCase)));
-
-            if (matched)
-            {
-                result.Add(run);
-            }
-        }
-
-        return result;
     }
 
     private async Task LoadSelectedRunAsync()

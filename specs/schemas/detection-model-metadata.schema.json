@@ -1,0 +1,56 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "DetectionModelMetadata",
+  "description": "检测模型训练产物 artifacts/model-metadata.json 的 JSON Schema",
+  "type": "object",
+  "required": ["framework", "task", "device", "model", "inputSize", "preprocessing", "targetEncoding", "lossWeights", "headType", "status"],
+  "additionalProperties": true,
+  "properties": {
+    "framework": { "type": "string", "minLength": 1 },
+    "task": { "type": "string", "enum": ["detection"] },
+    "device": { "type": "string", "minLength": 1 },
+    "model": { "type": "string", "minLength": 1 },
+    "inputSize": { "type": "integer", "minimum": 1 },
+    "preprocessing": {
+      "type": "object",
+      "required": ["inputSize", "normalizeMean", "normalizeStd", "resizeSampler", "targetBoxStrategy"],
+      "properties": {
+        "inputSize": { "type": "integer", "minimum": 1 },
+        "normalizeMean": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "normalizeStd": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "resizeSampler": { "type": "string", "minLength": 1 },
+        "targetBoxStrategy": { "type": "string", "minLength": 1 }
+      }
+    },
+    "targetEncoding": {
+      "type": "object",
+      "required": ["topK", "valuesPerBox", "flattenedSize"],
+      "properties": {
+        "topK": { "type": "integer", "minimum": 1 },
+        "valuesPerBox": { "type": "integer", "minimum": 1 },
+        "flattenedSize": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "lossWeights": {
+      "type": "object",
+      "required": ["bbox", "category", "objectness"],
+      "properties": {
+        "bbox": { "type": "number" },
+        "category": { "type": "number" },
+        "objectness": { "type": "number" }
+      }
+    },
+    "headType": { "type": "string", "minLength": 1 },
+    "status": { "type": "string", "minLength": 1 }
+  }
+}
