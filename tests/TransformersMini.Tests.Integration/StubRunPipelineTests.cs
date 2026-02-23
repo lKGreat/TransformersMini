@@ -197,6 +197,9 @@ public sealed class StubRunPipelineTests
             var detail = await runRepository.GetAsync(result.RunId, CancellationToken.None);
             Assert.NotNull(detail);
             Assert.Contains(detail!.LatestMetrics, x => x.Name == "loss");
+            Assert.Contains(detail.LatestMetrics, x => x.Name == "loss_bbox");
+            Assert.Contains(detail.LatestMetrics, x => x.Name == "loss_category");
+            Assert.Contains(detail.LatestMetrics, x => x.Name == "loss_objectness");
             Assert.Contains(detail.Artifacts, x => x.Kind == "report");
             Assert.Contains(detail.Tags, x => x.Key == "det.preprocess.target_box_strategy" && x.Value == targetBoxStrategy);
             Assert.Contains(detail.Tags, x => x.Key == "det.preprocess.resize_sampler" && x.Value == "bilinear");
@@ -215,6 +218,16 @@ public sealed class StubRunPipelineTests
             Assert.Equal(2, targetEncoding.GetProperty("topK").GetInt32());
             Assert.Equal(6, targetEncoding.GetProperty("valuesPerBox").GetInt32());
             Assert.Equal(12, targetEncoding.GetProperty("flattenedSize").GetInt32());
+            var lossWeights = summaryDoc.RootElement.GetProperty("lossWeights");
+            Assert.Equal(1d, lossWeights.GetProperty("Bbox").GetDouble());
+            Assert.Equal(0.5d, lossWeights.GetProperty("Category").GetDouble());
+            Assert.Equal(1d, lossWeights.GetProperty("Objectness").GetDouble());
+            var lossSummary = summaryDoc.RootElement.GetProperty("lossSummary");
+            Assert.True(lossSummary.GetProperty("AverageTotalLoss").GetDouble() >= 0d);
+            Assert.True(lossSummary.GetProperty("AverageBboxLoss").GetDouble() >= 0d);
+            Assert.True(lossSummary.GetProperty("AverageCategoryLoss").GetDouble() >= 0d);
+            Assert.True(lossSummary.GetProperty("AverageObjectnessLoss").GetDouble() >= 0d);
+            Assert.True(lossSummary.GetProperty("TrainStepCount").GetInt32() >= 1);
             Assert.Equal("multi-branch", summaryDoc.RootElement.GetProperty("headType").GetString());
         }
         finally
@@ -341,6 +354,13 @@ public sealed class StubRunPipelineTests
             Assert.True(metrics.TryGetProperty("MeanIou", out _));
             Assert.True(metrics.TryGetProperty("PrecisionAtIou50", out _));
             Assert.True(metrics.TryGetProperty("RecallAtIou50", out _));
+            var sampleDetails = reportDoc.RootElement.GetProperty("SampleDetails");
+            Assert.True(sampleDetails.ValueKind == JsonValueKind.Array);
+            Assert.True(sampleDetails.GetArrayLength() >= 1);
+            var firstDetail = sampleDetails[0];
+            Assert.True(firstDetail.TryGetProperty("SampleId", out _));
+            Assert.True(firstDetail.TryGetProperty("TruePositive", out _));
+            Assert.True(firstDetail.TryGetProperty("MeanMatchedIou", out _));
         }
         finally
         {

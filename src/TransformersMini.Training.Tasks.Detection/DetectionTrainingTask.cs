@@ -19,6 +19,9 @@ public sealed class DetectionTrainingTask : ITrainingTask
 {
     private const int DetectionTargetBoxValueCount = 6; // cx, cy, bw, bh, cls, obj
     private const float EvalIouThreshold = 0.5f;
+    private const double DetectionBboxLossWeight = 1.0d;
+    private const double DetectionCategoryLossWeight = 0.5d;
+    private const double DetectionObjectnessLossWeight = 1.0d;
 
     public TaskType TaskType => TaskType.Detection;
 
@@ -67,11 +70,19 @@ public sealed class DetectionTrainingTask : ITrainingTask
             using var model = CreateDetectorModel(tensorOptions.TargetTopK).to(torchDevice);
             using var optimizer = torch.optim.Adam(model.parameters(), context.Config.Optimization.LearningRate);
             model.train();
+            double trainLossSum = 0d;
+            double trainBboxLossSum = 0d;
+            double trainCategoryLossSum = 0d;
+            double trainObjectnessLossSum = 0d;
+            var trainStepCount = 0;
 
             for (var epoch = 1; epoch <= epochs; epoch++)
             {
                 ct.ThrowIfCancellationRequested();
                 double epochLoss = 0;
+                double epochBboxLoss = 0d;
+                double epochCategoryLoss = 0d;
+                double epochObjectnessLoss = 0d;
 
                 for (var step = 1; step <= stepsPerEpoch; step++)
                 {
@@ -90,31 +101,77 @@ public sealed class DetectionTrainingTask : ITrainingTask
 
                     optimizer.zero_grad();
                     using var prediction = model.forward(inputs);
-                    using var loss = TorchSharp.torch.nn.functional.mse_loss(prediction, targets);
+                    using var lossBreakdown = ComputeDetectionTrainLoss(prediction, targets, batchSize, tensorOptions.TargetTopK);
+                    using var loss = lossBreakdown.TotalLoss;
                     loss.backward();
                     optimizer.step();
 
                     var lossValue = loss.ToDouble();
+                    var bboxLossValue = lossBreakdown.BboxLoss.ToDouble();
+                    var categoryLossValue = lossBreakdown.CategoryLoss.ToDouble();
+                    var objectnessLossValue = lossBreakdown.ObjectnessLoss.ToDouble();
                     epochLoss += lossValue;
+                    epochBboxLoss += bboxLossValue;
+                    epochCategoryLoss += categoryLossValue;
+                    epochObjectnessLoss += objectnessLossValue;
+                    trainLossSum += lossValue;
+                    trainBboxLossSum += bboxLossValue;
+                    trainCategoryLossSum += categoryLossValue;
+                    trainObjectnessLossSum += objectnessLossValue;
+                    trainStepCount++;
+                    var metricTimestamp = DateTimeOffset.UtcNow;
 
-                    await context.RunRepository.AppendMetricAsync(
-                        context.RunId,
-                        new MetricPoint("loss", globalStep, lossValue, DateTimeOffset.UtcNow),
-                        ct);
+                    var trainMetrics = new[]
+                    {
+                        new MetricPoint("loss", globalStep, lossValue, metricTimestamp),
+                        new MetricPoint("loss_bbox", globalStep, bboxLossValue, metricTimestamp),
+                        new MetricPoint("loss_category", globalStep, categoryLossValue, metricTimestamp),
+                        new MetricPoint("loss_objectness", globalStep, objectnessLossValue, metricTimestamp)
+                    };
+
+                    foreach (var metric in trainMetrics)
+                    {
+                        await context.RunRepository.AppendMetricAsync(context.RunId, metric, ct);
+                    }
 
                     await context.ArtifactStore.AppendLineAsync(
                         context.RunId,
                         "metrics.jsonl",
-                        JsonSerializer.Serialize(new { metric = "loss", step = globalStep, value = lossValue, epoch }),
+                        JsonSerializer.Serialize(new DetectionTrainMetricStreamEntry(
+                            globalStep,
+                            epoch,
+                            lossValue,
+                            bboxLossValue,
+                            categoryLossValue,
+                            objectnessLossValue)),
                         ct);
                 }
 
                 var avgLoss = epochLoss / stepsPerEpoch;
+                var avgEpochBboxLoss = epochBboxLoss / stepsPerEpoch;
+                var avgEpochCategoryLoss = epochCategoryLoss / stepsPerEpoch;
+                var avgEpochObjectnessLoss = epochObjectnessLoss / stepsPerEpoch;
                 await context.RunRepository.AppendEventAsync(
                     context.RunId,
-                    new RunEvent("Information", "EpochCompleted", $"第 {epoch} 轮完成，平均损失 {avgLoss:F6}", DateTimeOffset.UtcNow),
+                    new RunEvent(
+                        "Information",
+                        "EpochCompleted",
+                        $"第 {epoch} 轮完成，平均损失 {avgLoss:F6}（bbox={avgEpochBboxLoss:F6}, cls={avgEpochCategoryLoss:F6}, obj={avgEpochObjectnessLoss:F6}）",
+                        DateTimeOffset.UtcNow),
                     ct);
             }
+
+            var denominator = Math.Max(1, trainStepCount);
+            var trainLossSummary = new DetectionTrainLossSummarySnapshot(
+                trainLossSum / denominator,
+                trainBboxLossSum / denominator,
+                trainCategoryLossSum / denominator,
+                trainObjectnessLossSum / denominator,
+                trainStepCount);
+            var lossWeights = new DetectionLossWeightsSnapshot(
+                DetectionBboxLossWeight,
+                DetectionCategoryLossWeight,
+                DetectionObjectnessLossWeight);
 
             await context.ArtifactStore.WriteTextAsync(
                 context.RunId,
@@ -140,6 +197,7 @@ public sealed class DetectionTrainingTask : ITrainingTask
                         valuesPerBox = DetectionTargetBoxValueCount,
                         flattenedSize = tensorOptions.TargetTopK * DetectionTargetBoxValueCount
                     },
+                    lossWeights,
                     headType = "multi-branch",
                     status = "trained"
                 }),
@@ -172,6 +230,8 @@ public sealed class DetectionTrainingTask : ITrainingTask
                         valuesPerBox = DetectionTargetBoxValueCount,
                         flattenedSize = tensorOptions.TargetTopK * DetectionTargetBoxValueCount
                     },
+                    lossWeights,
+                    lossSummary = trainLossSummary,
                     headType = "multi-branch",
                     status = "torchsharp-train-complete"
                 }),
@@ -213,7 +273,8 @@ public sealed class DetectionTrainingTask : ITrainingTask
                 isTraining: false);
             using var target = BuildTargetTensor(samples, sampleCount, 1, tensorOptions, torchDevice);
             using var prediction = model.forward(inputs);
-            var evalMetrics = ComputeApproxEvalMetrics(prediction, target, sampleCount, tensorOptions.TargetTopK);
+            var evalResult = ComputeApproxEvalMetrics(prediction, target, samples, sampleCount, tensorOptions.TargetTopK);
+            var evalMetrics = evalResult.Metrics;
             var primaryMetricName = stage == "test" ? "mAP50_test" : "mAP50";
 
             var metricPoints = new[]
@@ -256,6 +317,7 @@ public sealed class DetectionTrainingTask : ITrainingTask
                         tensorOptions.TargetTopK * DetectionTargetBoxValueCount),
                     "approx-iou-pr",
                     evalMetrics,
+                    evalResult.SampleDetails,
                     "torchsharp-eval-complete")),
                 ct);
 
@@ -644,7 +706,12 @@ public sealed class DetectionTrainingTask : ITrainingTask
         return Math.Max(0f, bbox[2]) * Math.Max(0f, bbox[3]);
     }
 
-    private static ApproxDetectionEvalMetrics ComputeApproxEvalMetrics(Tensor prediction, Tensor target, int sampleCount, int targetTopK)
+    private static ApproxDetectionEvalComputationResult ComputeApproxEvalMetrics(
+        Tensor prediction,
+        Tensor target,
+        IReadOnlyList<DataSample> samples,
+        int sampleCount,
+        int targetTopK)
     {
         using var predictionCpu = prediction.detach().to(CPU);
         using var targetCpu = target.detach().to(CPU);
@@ -659,6 +726,7 @@ public sealed class DetectionTrainingTask : ITrainingTask
         var truePositive = 0;
         var falsePositive = 0;
         var falseNegative = 0;
+        var sampleDetails = new List<ApproxDetectionEvalSampleDetail>(sampleCount);
 
         for (var sampleIndex = 0; sampleIndex < sampleCount; sampleIndex++)
         {
@@ -676,6 +744,10 @@ public sealed class DetectionTrainingTask : ITrainingTask
             var predictedPositive = predictedBoxes.Where(x => x.Objectness >= 0.5f).ToList();
             var targetPositive = targetBoxes.Where(x => x.Objectness >= 0.5f).ToList();
             var targetMatched = new bool[targetPositive.Count];
+            double sampleMatchedIou = 0d;
+            var sampleMatchedCount = 0;
+            var sampleTruePositive = 0;
+            var sampleFalsePositive = 0;
 
             foreach (var predicted in predictedPositive)
             {
@@ -700,22 +772,40 @@ public sealed class DetectionTrainingTask : ITrainingTask
                 {
                     targetMatched[bestIndex] = true;
                     truePositive++;
+                    sampleTruePositive++;
                     totalMatchedIou += bestIou;
+                    sampleMatchedIou += bestIou;
                     matchedCount++;
+                    sampleMatchedCount++;
                 }
                 else
                 {
                     falsePositive++;
+                    sampleFalsePositive++;
                 }
             }
 
+            var sampleFalseNegative = 0;
             for (var targetIndex = 0; targetIndex < targetMatched.Length; targetIndex++)
             {
                 if (!targetMatched[targetIndex])
                 {
                     falseNegative++;
+                    sampleFalseNegative++;
                 }
             }
+
+            var selectedSample = PickSample(samples, sampleIndex + 1);
+            sampleDetails.Add(new ApproxDetectionEvalSampleDetail(
+                sampleIndex,
+                selectedSample.Id,
+                selectedSample.SourcePath,
+                predictedPositive.Count,
+                targetPositive.Count,
+                sampleTruePositive,
+                sampleFalsePositive,
+                sampleFalseNegative,
+                sampleMatchedCount > 0 ? sampleMatchedIou / sampleMatchedCount : 0d));
         }
 
         var precision = truePositive + falsePositive > 0
@@ -728,7 +818,7 @@ public sealed class DetectionTrainingTask : ITrainingTask
             ? totalMatchedIou / matchedCount
             : 0d;
 
-        return new ApproxDetectionEvalMetrics(
+        var metrics = new ApproxDetectionEvalMetrics(
             MeanIou: meanIou,
             PrecisionAtIou50: precision,
             RecallAtIou50: recall,
@@ -736,6 +826,30 @@ public sealed class DetectionTrainingTask : ITrainingTask
             FalsePositive: falsePositive,
             FalseNegative: falseNegative,
             IouThreshold: EvalIouThreshold);
+        return new ApproxDetectionEvalComputationResult(metrics, sampleDetails);
+    }
+
+    private static DetectionTrainLossBreakdown ComputeDetectionTrainLoss(Tensor prediction, Tensor target, int batchSize, int targetTopK)
+    {
+        using var predictionBoxes = prediction.reshape([batchSize, targetTopK, DetectionTargetBoxValueCount]);
+        using var targetBoxes = target.reshape([batchSize, targetTopK, DetectionTargetBoxValueCount]);
+
+        using var bboxPrediction = predictionBoxes.narrow(2, 0, 4);
+        using var bboxTarget = targetBoxes.narrow(2, 0, 4);
+        using var categoryPrediction = predictionBoxes.narrow(2, 4, 1);
+        using var categoryTarget = targetBoxes.narrow(2, 4, 1);
+        using var objectnessPrediction = predictionBoxes.narrow(2, 5, 1);
+        using var objectnessTarget = targetBoxes.narrow(2, 5, 1);
+
+        var bboxLoss = TorchSharp.torch.nn.functional.mse_loss(bboxPrediction, bboxTarget);
+        var categoryLoss = TorchSharp.torch.nn.functional.mse_loss(categoryPrediction, categoryTarget);
+        var objectnessLoss = TorchSharp.torch.nn.functional.binary_cross_entropy(objectnessPrediction, objectnessTarget);
+        var totalLoss =
+            (bboxLoss * DetectionBboxLossWeight) +
+            (categoryLoss * DetectionCategoryLossWeight) +
+            (objectnessLoss * DetectionObjectnessLossWeight);
+
+        return new DetectionTrainLossBreakdown(totalLoss, bboxLoss, categoryLoss, objectnessLoss);
     }
 
     private static DetectionTargetBox ReadDetectionTargetBox(float[] values, int offset, bool normalizePrediction)
@@ -1000,6 +1114,26 @@ public sealed class DetectionTrainingTask : ITrainingTask
 
     private sealed record DetectionMetricStreamEntry(string Metric, long Step, double Value);
 
+    private sealed record DetectionTrainMetricStreamEntry(
+        long Step,
+        int Epoch,
+        double Loss,
+        double BboxLoss,
+        double CategoryLoss,
+        double ObjectnessLoss);
+
+    private sealed record DetectionLossWeightsSnapshot(
+        double Bbox,
+        double Category,
+        double Objectness);
+
+    private sealed record DetectionTrainLossSummarySnapshot(
+        double AverageTotalLoss,
+        double AverageBboxLoss,
+        double AverageCategoryLoss,
+        double AverageObjectnessLoss,
+        int TrainStepCount);
+
     private sealed record DetectionPreprocessingSnapshot(
         int InputSize,
         float[] NormalizeMean,
@@ -1021,6 +1155,36 @@ public sealed class DetectionTrainingTask : ITrainingTask
         int FalseNegative,
         float IouThreshold);
 
+    private sealed record ApproxDetectionEvalSampleDetail(
+        int SampleIndex,
+        string SampleId,
+        string SourcePath,
+        int PredictedPositiveCount,
+        int TargetPositiveCount,
+        int TruePositive,
+        int FalsePositive,
+        int FalseNegative,
+        double MeanMatchedIou);
+
+    private sealed record ApproxDetectionEvalComputationResult(
+        ApproxDetectionEvalMetrics Metrics,
+        IReadOnlyList<ApproxDetectionEvalSampleDetail> SampleDetails);
+
+    private sealed record DetectionTrainLossBreakdown(
+        Tensor TotalLoss,
+        Tensor BboxLoss,
+        Tensor CategoryLoss,
+        Tensor ObjectnessLoss) : IDisposable
+    {
+        public void Dispose()
+        {
+            TotalLoss.Dispose();
+            BboxLoss.Dispose();
+            CategoryLoss.Dispose();
+            ObjectnessLoss.Dispose();
+        }
+    }
+
     private sealed record DetectionEvalReport(
         string Task,
         string Mode,
@@ -1032,6 +1196,7 @@ public sealed class DetectionTrainingTask : ITrainingTask
         DetectionTargetEncodingSnapshot TargetEncoding,
         string MetricType,
         ApproxDetectionEvalMetrics Metrics,
+        IReadOnlyList<ApproxDetectionEvalSampleDetail> SampleDetails,
         string Status);
 
     private sealed class TinyMultiHeadDetectorModel : Module<Tensor, Tensor>

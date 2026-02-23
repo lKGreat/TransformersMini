@@ -264,6 +264,7 @@ public sealed class MainForm : Form
         }
 
         AppendPreprocessingSection(sb, detail);
+        AppendReportInsightSections(sb, detail);
 
         sb.AppendLine();
         sb.AppendLine("Events:");
@@ -273,6 +274,145 @@ public sealed class MainForm : Form
         }
 
         _detailsText.Text = sb.ToString();
+    }
+
+    private static void AppendReportInsightSections(StringBuilder sb, RunDetailDto detail)
+    {
+        var reportCandidates = new[]
+        {
+            Path.Combine(detail.RunDirectory, "reports", "summary.json"),
+            Path.Combine(detail.RunDirectory, "reports", "validate.json"),
+            Path.Combine(detail.RunDirectory, "reports", "test.json")
+        };
+
+        var reportPath = reportCandidates.FirstOrDefault(File.Exists);
+        if (string.IsNullOrWhiteSpace(reportPath))
+        {
+            return;
+        }
+
+        try
+        {
+            using var doc = JsonDocument.Parse(File.ReadAllText(reportPath));
+            var root = doc.RootElement;
+            AppendDetectionReportInsights(sb, root);
+            AppendOcrReportInsights(sb, root);
+        }
+        catch
+        {
+            // 中文说明：详情面板读取报告增强信息失败时忽略，不影响主流程。
+        }
+    }
+
+    private static void AppendDetectionReportInsights(StringBuilder sb, JsonElement root)
+    {
+        if (TryGetPropertyIgnoreCase(root, "lossSummary", out var lossSummary) && lossSummary.ValueKind == JsonValueKind.Object)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Detection Loss Summary:");
+            AppendNumericField(sb, lossSummary, "AverageTotalLoss");
+            AppendNumericField(sb, lossSummary, "AverageBboxLoss");
+            AppendNumericField(sb, lossSummary, "AverageCategoryLoss");
+            AppendNumericField(sb, lossSummary, "AverageObjectnessLoss");
+            AppendNumericField(sb, lossSummary, "TrainStepCount");
+        }
+
+        if (TryGetPropertyIgnoreCase(root, "SampleDetails", out var sampleDetails) && sampleDetails.ValueKind == JsonValueKind.Array)
+        {
+            sb.AppendLine();
+            sb.AppendLine($"Detection Sample Details: count={sampleDetails.GetArrayLength()} (展示前10条)");
+            var shown = 0;
+            foreach (var item in sampleDetails.EnumerateArray())
+            {
+                if (shown >= 10)
+                {
+                    break;
+                }
+
+                var sampleId = TryGetString(item, "SampleId");
+                var tp = TryGetNumberText(item, "TruePositive");
+                var fp = TryGetNumberText(item, "FalsePositive");
+                var fn = TryGetNumberText(item, "FalseNegative");
+                var meanIou = TryGetNumberText(item, "MeanMatchedIou");
+                sb.AppendLine($"- {sampleId} | TP={tp} FP={fp} FN={fn} MeanIoU={meanIou}");
+                shown++;
+            }
+        }
+    }
+
+    private static void AppendOcrReportInsights(StringBuilder sb, JsonElement root)
+    {
+        if (!TryGetPropertyIgnoreCase(root, "Task", out var taskElement) || taskElement.ValueKind != JsonValueKind.String)
+        {
+            return;
+        }
+
+        var task = taskElement.GetString();
+        if (!string.Equals(task, "ocr", StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (!TryGetPropertyIgnoreCase(root, "Metrics", out var metrics) || metrics.ValueKind != JsonValueKind.Object)
+        {
+            return;
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("OCR Metrics (Report):");
+        AppendNumericField(sb, metrics, "Cer");
+        AppendNumericField(sb, metrics, "Wer");
+        AppendNumericField(sb, metrics, "ExactMatchCount");
+        AppendNumericField(sb, metrics, "SampleCount");
+    }
+
+    private static void AppendNumericField(StringBuilder sb, JsonElement container, string propertyName)
+    {
+        if (TryGetPropertyIgnoreCase(container, propertyName, out var value))
+        {
+            sb.AppendLine($"- {propertyName} = {value.GetRawText()}");
+        }
+    }
+
+    private static string TryGetString(JsonElement container, string propertyName)
+    {
+        if (TryGetPropertyIgnoreCase(container, propertyName, out var value) && value.ValueKind == JsonValueKind.String)
+        {
+            return value.GetString() ?? string.Empty;
+        }
+
+        return string.Empty;
+    }
+
+    private static string TryGetNumberText(JsonElement container, string propertyName)
+    {
+        if (TryGetPropertyIgnoreCase(container, propertyName, out var value))
+        {
+            return value.GetRawText();
+        }
+
+        return "0";
+    }
+
+    private static bool TryGetPropertyIgnoreCase(JsonElement container, string propertyName, out JsonElement value)
+    {
+        if (container.ValueKind != JsonValueKind.Object)
+        {
+            value = default;
+            return false;
+        }
+
+        foreach (var property in container.EnumerateObject())
+        {
+            if (string.Equals(property.Name, propertyName, StringComparison.OrdinalIgnoreCase))
+            {
+                value = property.Value;
+                return true;
+            }
+        }
+
+        value = default;
+        return false;
     }
 
     private static void AppendPreprocessingSection(StringBuilder sb, RunDetailDto detail)
@@ -293,7 +433,7 @@ public sealed class MainForm : Form
         try
         {
             using var doc = JsonDocument.Parse(File.ReadAllText(reportPath));
-            if (!doc.RootElement.TryGetProperty("preprocessing", out var preprocessing) || preprocessing.ValueKind != JsonValueKind.Object)
+            if (!TryGetPropertyIgnoreCase(doc.RootElement, "preprocessing", out var preprocessing) || preprocessing.ValueKind != JsonValueKind.Object)
             {
                 return;
             }
@@ -301,27 +441,27 @@ public sealed class MainForm : Form
             sb.AppendLine();
             sb.AppendLine("Preprocessing:");
 
-            if (preprocessing.TryGetProperty("InputSize", out var inputSize))
+            if (TryGetPropertyIgnoreCase(preprocessing, "InputSize", out var inputSize))
             {
                 sb.AppendLine($"- InputSize = {inputSize.GetRawText()}");
             }
 
-            if (preprocessing.TryGetProperty("resizeSampler", out var resizeSampler))
+            if (TryGetPropertyIgnoreCase(preprocessing, "resizeSampler", out var resizeSampler))
             {
                 sb.AppendLine($"- resizeSampler = {resizeSampler.GetString()}");
             }
 
-            if (preprocessing.TryGetProperty("targetBoxStrategy", out var targetBoxStrategy))
+            if (TryGetPropertyIgnoreCase(preprocessing, "targetBoxStrategy", out var targetBoxStrategy))
             {
                 sb.AppendLine($"- targetBoxStrategy = {targetBoxStrategy.GetString()}");
             }
 
-            if (preprocessing.TryGetProperty("normalizeMean", out var normalizeMean))
+            if (TryGetPropertyIgnoreCase(preprocessing, "normalizeMean", out var normalizeMean))
             {
                 sb.AppendLine($"- normalizeMean = {normalizeMean.GetRawText()}");
             }
 
-            if (preprocessing.TryGetProperty("normalizeStd", out var normalizeStd))
+            if (TryGetPropertyIgnoreCase(preprocessing, "normalizeStd", out var normalizeStd))
             {
                 sb.AppendLine($"- normalizeStd = {normalizeStd.GetRawText()}");
             }
