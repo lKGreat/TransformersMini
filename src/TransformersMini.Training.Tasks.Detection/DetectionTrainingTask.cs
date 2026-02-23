@@ -19,6 +19,7 @@ namespace TransformersMini.Training.Tasks.Detection;
 public sealed class DetectionTrainingTask : ITrainingTask
 {
     private const int DetectionTargetBoxValueCount = 6; // cx, cy, bw, bh, cls, obj
+    private const string ModelWeightsRelativePath = "artifacts/model-weights.bin";
     private const float EvalIouThreshold = 0.5f;
     private const double DetectionBboxLossWeight = 1.0d;
     private const double DetectionCategoryLossWeight = 0.5d;
@@ -177,6 +178,31 @@ public sealed class DetectionTrainingTask : ITrainingTask
                 DetectionBboxLossWeight,
                 DetectionCategoryLossWeight,
                 DetectionObjectnessLossWeight);
+
+            var weightsSaved = TrySaveModelWeights(model, Path.Combine(context.RunDirectory, "artifacts", "model-weights.bin"));
+            await context.RunRepository.AppendEventAsync(
+                context.RunId,
+                new RunEvent(
+                    "Information",
+                    "ModelWeightsSaved",
+                    weightsSaved
+                        ? $"模型权重已保存：{ModelWeightsRelativePath}"
+                        : "模型未提供可用保存接口，已跳过权重保存。",
+                    DateTimeOffset.UtcNow),
+                ct);
+            if (weightsSaved)
+            {
+                await context.ArtifactStore.WriteTextAsync(
+                    context.RunId,
+                    "artifacts/model-weights.manifest.json",
+                    JsonSerializer.Serialize(new
+                    {
+                        path = ModelWeightsRelativePath,
+                        format = "torch-module-save",
+                        createdAt = DateTimeOffset.UtcNow
+                    }),
+                    ct);
+            }
 
             await context.ArtifactStore.WriteTextAsync(
                 context.RunId,
@@ -1096,6 +1122,26 @@ public sealed class DetectionTrainingTask : ITrainingTask
 
     private static DetectionTargetEncodingDto BuildTargetEncodingDto(int topK) =>
         new(topK, DetectionTargetBoxValueCount, topK * DetectionTargetBoxValueCount);
+
+    private static bool TrySaveModelWeights(Module<Tensor, Tensor> model, string outputPath)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+            var saveMethod = model.GetType().GetMethod("save", [typeof(string)]);
+            if (saveMethod is null)
+            {
+                return false;
+            }
+
+            saveMethod.Invoke(model, [outputPath]);
+            return File.Exists(outputPath);
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     private sealed record ApproxDetectionEvalComputationResult(
         DetectionEvalMetricsDto Metrics,

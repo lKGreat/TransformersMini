@@ -14,6 +14,7 @@ public sealed class MainForm : Form, IWorkspaceShellContext
         ISystemProbe systemProbe,
         IInferenceOrchestrator inferenceOrchestrator,
         IRunQueryRepository runQueryRepository,
+        IDataTrainingConfigBuilder dataTrainingConfigBuilder,
         IAnnotationService annotationService)
     {
         Text = "TransformersMini Workbench";
@@ -42,7 +43,7 @@ public sealed class MainForm : Form, IWorkspaceShellContext
         navContainer.Controls.Add(leftNav);
         navContainer.Controls.Add(navTitle);
 
-        var trainPage = new TrainingSetupPanel(runControl, runQueryRepository, systemProbe, this) { Dock = DockStyle.Fill };
+        var trainPage = new TrainingSetupPanel(runControl, runQueryRepository, dataTrainingConfigBuilder, systemProbe, this) { Dock = DockStyle.Fill };
         var inferPage = new InferenceWorkspaceControl(inferenceOrchestrator, systemProbe, runQueryRepository, this) { Dock = DockStyle.Fill };
         var annotationPage = new AnnotationWorkspaceHostControl(annotationService, this) { Dock = DockStyle.Fill };
         var queryPage = new RunListAndFilterPanel(runControl, runQueryRepository, systemProbe) { Dock = DockStyle.Fill };

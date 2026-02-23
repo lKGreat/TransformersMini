@@ -94,6 +94,10 @@ public sealed class TrainingOrchestrator : ITrainingOrchestrator
             DryRun = false
         };
 
+        await _runRepository.AppendEventAsync(
+            runId,
+            new RunEvent("Information", "RunStarting", $"Task={config.Task}, Mode={config.Mode}, Device={config.Device}, Dataset={config.Dataset.Format}", DateTimeOffset.UtcNow),
+            ct);
         await _runRepository.UpdateStatusAsync(runId, RunStatus.Running, "Task started.", null, ct);
 
         try
@@ -110,8 +114,13 @@ public sealed class TrainingOrchestrator : ITrainingOrchestrator
         catch (Exception ex)
         {
             _logger.LogError(ex, "Run {RunId} failed.", runId);
-            await _runRepository.AppendEventAsync(runId, new RunEvent("Error", "UnhandledException", ex.Message, DateTimeOffset.UtcNow), CancellationToken.None);
-            await _runRepository.UpdateStatusAsync(runId, RunStatus.Failed, ex.Message, DateTimeOffset.UtcNow, CancellationToken.None);
+            var diagnosticMessage =
+                $"Unhandled exception: {ex.GetType().Name} | Task={config.Task} | Mode={config.Mode} | Device={config.Device} | ConfigPath={command.ConfigPath}";
+            await _runRepository.AppendEventAsync(
+                runId,
+                new RunEvent("Error", "UnhandledException", $"{diagnosticMessage} | Message={ex.Message}", DateTimeOffset.UtcNow),
+                CancellationToken.None);
+            await _runRepository.UpdateStatusAsync(runId, RunStatus.Failed, diagnosticMessage, DateTimeOffset.UtcNow, CancellationToken.None);
             throw;
         }
     }

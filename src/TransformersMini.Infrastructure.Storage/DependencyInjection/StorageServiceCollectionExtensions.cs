@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using TransformersMini.Contracts.Abstractions;
 using TransformersMini.Infrastructure.Storage.Storage;
 
@@ -20,7 +21,7 @@ public static class StorageServiceCollectionExtensions
 
         var normalizedRoot = Path.GetFullPath(runsRoot);
         var dbPath = Path.Combine(normalizedRoot, "runs.db");
-        services.AddSingleton<IArtifactStore>(_ => new FileArtifactStore(normalizedRoot));
+        services.AddSingleton<IArtifactStore>(sp => new FileArtifactStore(normalizedRoot, sp.GetRequiredService<ILogger<FileArtifactStore>>()));
         services.AddSingleton<IRunRepository>(_ => new SqliteRunRepository(dbPath));
         services.AddSingleton<IRunQueryRepository>(_ => new SqliteRunQueryRepository(dbPath));
         return services;

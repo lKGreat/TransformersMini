@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using SixLabors.ImageSharp;
 using SixLabors.ImageSharp.PixelFormats;
 using System.Text.Json;
+using TransformersMini.Application.DependencyInjection;
 using TransformersMini.Contracts.Abstractions;
 using TransformersMini.Contracts.Runtime;
 using TransformersMini.Infrastructure.DependencyInjection;
@@ -600,6 +601,7 @@ public sealed class StubRunPipelineTests
     private static ServiceProvider BuildProvider(string runsRoot)
     {
         var services = new ServiceCollection();
+        services.AddTransformersMiniApplication();
         services.AddTransformersMiniPlatform(runsRoot);
         return services.BuildServiceProvider();
     }

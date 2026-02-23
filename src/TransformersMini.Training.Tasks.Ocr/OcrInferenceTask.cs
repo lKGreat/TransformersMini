@@ -49,6 +49,31 @@ public sealed class OcrInferenceTask : IInferenceTask
             var outputDim = maxTextLength * vocabularySize;
 
             using var model = CreateTinyOcrModel(inputHeight, inputWidth, outputDim).to(torchDevice);
+            var modelWeightsPath = Path.Combine(context.ModelRunDirectory, "artifacts", "model-weights.bin");
+            if (File.Exists(modelWeightsPath))
+            {
+                if (TryLoadModelWeights(model, modelWeightsPath))
+                {
+                    await context.RunRepository.AppendEventAsync(
+                        context.RunId,
+                        new RunEvent("Information", "ModelWeightsLoaded", $"已加载模型权重：{modelWeightsPath}", DateTimeOffset.UtcNow),
+                        ct);
+                }
+                else
+                {
+                    await context.RunRepository.AppendEventAsync(
+                        context.RunId,
+                        new RunEvent("Warning", "ModelWeightsLoadSkipped", $"检测到权重文件但加载失败，继续使用默认权重：{modelWeightsPath}", DateTimeOffset.UtcNow),
+                        ct);
+                }
+            }
+            else
+            {
+                await context.RunRepository.AppendEventAsync(
+                    context.RunId,
+                    new RunEvent("Warning", "ModelWeightsMissing", $"未找到模型权重文件，继续使用默认权重：{modelWeightsPath}", DateTimeOffset.UtcNow),
+                    ct);
+            }
             model.eval();
 
             // 优先使用 test split，fallback 到 val，再到 train
@@ -297,5 +322,24 @@ public sealed class OcrInferenceTask : IInferenceTask
         }
 
         return prev[predicted.Length] / (double)target.Length;
+    }
+
+    private static bool TryLoadModelWeights(Module<Tensor, Tensor> model, string inputPath)
+    {
+        try
+        {
+            var loadMethod = model.GetType().GetMethod("load", [typeof(string)]);
+            if (loadMethod is null)
+            {
+                return false;
+            }
+
+            loadMethod.Invoke(model, [inputPath]);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 }

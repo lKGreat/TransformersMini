@@ -20,6 +20,7 @@ namespace TransformersMini.Training.Tasks.Ocr;
 public sealed class OcrTrainingTask : ITrainingTask
 {
     private const string DefaultCharset = "abcdefghijklmnopqrstuvwxyz0123456789";
+    private const string ModelWeightsRelativePath = "artifacts/model-weights.bin";
     private const int DefaultInputHeight = 32;
     private const int DefaultInputWidth = 128;
     private const int DefaultMaxTextLength = 16;
@@ -110,6 +111,31 @@ public sealed class OcrTrainingTask : ITrainingTask
 
             var trainMetrics = await EvaluateDatasetAsync(model, samples, options, torchDevice, ct);
             await AppendEvalMetricsAsync(context, "train", trainMetrics, ct);
+
+            var weightsSaved = TrySaveModelWeights(model, Path.Combine(context.RunDirectory, "artifacts", "model-weights.bin"));
+            await context.RunRepository.AppendEventAsync(
+                context.RunId,
+                new RunEvent(
+                    "Information",
+                    "ModelWeightsSaved",
+                    weightsSaved
+                        ? $"模型权重已保存：{ModelWeightsRelativePath}"
+                        : "模型未提供可用保存接口，已跳过权重保存。",
+                    DateTimeOffset.UtcNow),
+                ct);
+            if (weightsSaved)
+            {
+                await context.ArtifactStore.WriteTextAsync(
+                    context.RunId,
+                    "artifacts/model-weights.manifest.json",
+                    JsonSerializer.Serialize(new
+                    {
+                        path = ModelWeightsRelativePath,
+                        format = "torch-module-save",
+                        createdAt = DateTimeOffset.UtcNow
+                    }),
+                    ct);
+            }
 
             await context.ArtifactStore.WriteTextAsync(
                 context.RunId,
@@ -699,4 +725,24 @@ public sealed class OcrTrainingTask : ITrainingTask
         new(metrics.Cer, metrics.Wer, metrics.ExactMatchCount, metrics.SampleCount, metrics.MaxTextLength);
 
     private sealed record OcrEvalMetrics(double Cer, double Wer, int ExactMatchCount, int SampleCount, int MaxTextLength);
+
+    private static bool TrySaveModelWeights(Module<Tensor, Tensor> model, string outputPath)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
+            var saveMethod = model.GetType().GetMethod("save", [typeof(string)]);
+            if (saveMethod is null)
+            {
+                return false;
+            }
+
+            saveMethod.Invoke(model, [outputPath]);
+            return File.Exists(outputPath);
+        }
+        catch
+        {
+            return false;
+        }
+    }
 }

@@ -1,14 +1,14 @@
 using Microsoft.Extensions.DependencyInjection;
 using System.Globalization;
 using System.Text.Json;
-using System.Text.Json.Serialization;
+using TransformersMini.Application.DependencyInjection;
 using TransformersMini.Contracts.Abstractions;
-using TransformersMini.Contracts.Configurations;
 using TransformersMini.Contracts.Runtime;
 using TransformersMini.Infrastructure.DependencyInjection;
 using TransformersMini.SharedKernel.Core;
 
 var services = new ServiceCollection();
+services.AddTransformersMiniApplication();
 services.AddTransformersMiniPlatform();
 using var provider = services.BuildServiceProvider();
 
@@ -39,6 +39,7 @@ if (command == "infer")
 // data-based 训练命令：直接从标注数据构造训练配置
 if (command is "train-data" or "validate-data" or "test-data")
 {
+    var dataConfigBuilder = provider.GetRequiredService<IDataTrainingConfigBuilder>();
     var dataTraining = ParseDataTrainingArgs(args);
     var effectiveDevice = NormalizeDeviceForCliBuild(dataTraining.Device);
     dataTraining.Device = effectiveDevice;
@@ -50,7 +51,27 @@ if (command is "train-data" or "validate-data" or "test-data")
     };
 
     ValidateBuildModeAndDeviceForCli(effectiveDevice, provider.GetRequiredService<ISystemProbe>());
-    var generatedConfigPath = await WriteTempTrainingConfigAsync(BuildTrainingConfigFromData(dataTraining, runMode));
+    var generatedConfigPath = await dataConfigBuilder.WriteTempConfigAsync(
+        dataConfigBuilder.Build(new DataTrainingBuildRequest
+        {
+            Task = string.Equals(dataTraining.Task, "ocr", StringComparison.OrdinalIgnoreCase) ? TaskType.Ocr : TaskType.Detection,
+            Mode = runMode,
+            AnnotationPath = dataTraining.AnnotationPath,
+            ImageRoot = dataTraining.ImageRoot,
+            DatasetFormat = dataTraining.DatasetFormat,
+            Device = effectiveDevice,
+            RunName = dataTraining.RunName,
+            Architecture = dataTraining.Architecture,
+            InputSize = dataTraining.InputSize,
+            NumClasses = dataTraining.NumClasses,
+            Epochs = dataTraining.Epochs,
+            BatchSize = dataTraining.BatchSize,
+            LearningRate = dataTraining.LearningRate,
+            ExperimentGroup = "cli-data-training",
+            ModelName = string.Equals(dataTraining.Task, "ocr", StringComparison.OrdinalIgnoreCase) ? "ocr-cli-data" : "det-cli-data"
+        }),
+        "cli-train",
+        CancellationToken.None);
     var dataOrchestrator = provider.GetRequiredService<ITrainingOrchestrator>();
     var runResult = await dataOrchestrator.ExecuteAsync(new RunTrainingCommand
     {
@@ -353,118 +374,6 @@ static DataTrainingCliArgs ParseDataTrainingArgs(string[] args)
     }
 
     return result;
-}
-
-static TrainingConfig BuildTrainingConfigFromData(DataTrainingCliArgs args, RunMode runMode)
-{
-    var isOcr = string.Equals(args.Task, "ocr", StringComparison.OrdinalIgnoreCase);
-    var dataset = new DatasetConfig();
-    if (isOcr)
-    {
-        dataset.Format = string.IsNullOrWhiteSpace(args.DatasetFormat) ? "ocr-manifest-v1" : args.DatasetFormat;
-        dataset.ManifestPath = args.AnnotationPath;
-        dataset.RootPath = args.ImageRoot ?? string.Empty;
-        dataset.AnnotationPath = args.AnnotationPath;
-    }
-    else
-    {
-        var rootPath = args.ImageRoot ?? string.Empty;
-        dataset.Format = string.IsNullOrWhiteSpace(args.DatasetFormat) ? "coco" : args.DatasetFormat;
-        dataset.RootPath = rootPath;
-        dataset.AnnotationPath = ToRelativeIfUnderRoot(rootPath, args.AnnotationPath);
-        dataset.TrainSplit = "train";
-        dataset.ValSplit = "val";
-        dataset.TestSplit = "test";
-        dataset.SkipInvalidSamples = false;
-    }
-
-    var config = new TrainingConfig
-    {
-        ConfigVersion = "1.0",
-        RunName = string.IsNullOrWhiteSpace(args.RunName) ? string.Empty : args.RunName,
-        Mode = runMode,
-        Task = isOcr ? TaskType.Ocr : TaskType.Detection,
-        Backend = BackendType.TorchSharp,
-        Device = args.Device ?? DeviceType.Auto,
-        Dataset = dataset,
-        Model = new ModelConfig
-        {
-            Name = isOcr ? "ocr-cli-data" : "det-cli-data",
-            Architecture = string.IsNullOrWhiteSpace(args.Architecture) ? (isOcr ? "crnn-like" : "yolo-like") : args.Architecture
-        },
-        Optimization = new OptimizationConfig
-        {
-            Epochs = args.Epochs > 0 ? args.Epochs : (isOcr ? 2 : 10),
-            BatchSize = args.BatchSize > 0 ? args.BatchSize : (isOcr ? 8 : 2),
-            LearningRate = args.LearningRate > 0 ? args.LearningRate : 0.001,
-            Seed = 42
-        },
-        Runtime = new RuntimeConfig
-        {
-            MaxWorkers = 1,
-            Deterministic = true,
-            SaveCheckpoints = false,
-            CheckpointEveryEpochs = 1
-        },
-        Output = new OutputConfig
-        {
-            BaseRunDirectory = "runs",
-            ExperimentGroup = "cli-data-training"
-        },
-        Logging = new LoggingConfig
-        {
-            Level = "Information",
-            WriteJsonLogs = false
-        }
-    };
-
-    if (!isOcr)
-    {
-        var numClasses = args.NumClasses > 0 ? args.NumClasses : 2;
-        config.TaskOptions["numClasses"] = JsonSerializer.SerializeToElement(numClasses);
-        if (args.InputSize > 0)
-        {
-            config.Model.Parameters["inputSize"] = JsonSerializer.SerializeToElement(args.InputSize);
-        }
-        else
-        {
-            config.Model.Parameters["inputSize"] = JsonSerializer.SerializeToElement(640);
-        }
-    }
-
-    return config;
-}
-
-static async Task<string> WriteTempTrainingConfigAsync(TrainingConfig config)
-{
-    var tempDir = Path.Combine(Path.GetTempPath(), "TransformersMini", "temp-configs");
-    Directory.CreateDirectory(tempDir);
-    var tempPath = Path.Combine(tempDir, $"cli-train-{DateTime.Now:yyyyMMdd-HHmmss}.json");
-    var options = new JsonSerializerOptions
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
-    };
-    options.Converters.Add(new JsonStringEnumConverter());
-    await File.WriteAllTextAsync(tempPath, JsonSerializer.Serialize(config, options));
-    return tempPath;
-}
-
-static string ToRelativeIfUnderRoot(string rootPath, string fullFilePath)
-{
-    if (string.IsNullOrWhiteSpace(rootPath))
-    {
-        return fullFilePath;
-    }
-
-    var normalizedRoot = Path.GetFullPath(rootPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-    var normalizedFile = Path.GetFullPath(fullFilePath);
-    if (!normalizedFile.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
-    {
-        return normalizedFile;
-    }
-
-    return Path.GetRelativePath(normalizedRoot, normalizedFile);
 }
 
 static async Task PrintInferenceResultsAsync(string runDirectory, int maxSamplesToPrint)

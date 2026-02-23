@@ -1,7 +1,6 @@
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 using TransformersMini.Contracts.Abstractions;
 using TransformersMini.Contracts.Configurations;
 using TransformersMini.Contracts.Runtime;
@@ -13,25 +12,22 @@ public sealed partial class TrainingSetupPanel : UserControl
 {
     private readonly IRunControlService _runControl;
     private readonly IRunQueryRepository _runQueryRepository;
+    private readonly IDataTrainingConfigBuilder _configBuilder;
     private readonly ISystemProbe _systemProbe;
     private readonly IWorkspaceShellContext _shell;
     private readonly System.Windows.Forms.Timer _timer = new() { Interval = 1500 };
     private bool _isRefreshing;
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true
-    };
-
-    static TrainingSetupPanel()
-    {
-        JsonOptions.Converters.Add(new JsonStringEnumConverter());
-    }
-
-    public TrainingSetupPanel(IRunControlService runControl, IRunQueryRepository runQueryRepository, ISystemProbe systemProbe, IWorkspaceShellContext shell)
+    public TrainingSetupPanel(
+        IRunControlService runControl,
+        IRunQueryRepository runQueryRepository,
+        IDataTrainingConfigBuilder configBuilder,
+        ISystemProbe systemProbe,
+        IWorkspaceShellContext shell)
     {
         _runControl = runControl;
         _runQueryRepository = runQueryRepository;
+        _configBuilder = configBuilder;
         _systemProbe = systemProbe;
         _shell = shell;
         InitializeComponent();
@@ -94,21 +90,43 @@ public sealed partial class TrainingSetupPanel : UserControl
 
     private void btnBrowseAnnotation_Click(object sender, EventArgs e)
     {
-        _shell.PickFile(txtAnnotationPath.Text, path =>
+        // 兼容旧习惯：保留经典文件浏览弹框交互。
+        using var dialog = new OpenFileDialog
         {
-            txtAnnotationPath.Text = path;
-            TryAutoDetectFormat(path);
-            _shell.ShowInfo($"已选择标注文件：{path}");
-        });
+            Filter = "标注文件 (*.json;*.jsonl;*.txt)|*.json;*.jsonl;*.txt|所有文件 (*.*)|*.*",
+            Title = "选择标注文件",
+            FileName = txtAnnotationPath.Text
+        };
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        txtAnnotationPath.Text = dialog.FileName;
+        TryAutoDetectFormat(dialog.FileName);
+        _shell.ShowInfo($"已选择标注文件：{dialog.FileName}");
     }
 
     private void btnBrowseImageRoot_Click(object sender, EventArgs e)
     {
-        _shell.PickFolder(txtImageRoot.Text, path =>
+        // 兼容旧习惯：保留经典目录选择弹框交互。
+        using var dialog = new FolderBrowserDialog
         {
-            txtImageRoot.Text = path;
-            _shell.ShowInfo($"已选择图像目录：{path}");
-        });
+            Description = "选择图像根目录",
+            UseDescriptionForTitle = true
+        };
+        if (Directory.Exists(txtImageRoot.Text))
+        {
+            dialog.SelectedPath = txtImageRoot.Text;
+        }
+
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        txtImageRoot.Text = dialog.SelectedPath;
+        _shell.ShowInfo($"已选择图像目录：{dialog.SelectedPath}");
     }
 
     private void TryAutoDetectFormat(string annotationPath)
@@ -160,7 +178,7 @@ public sealed partial class TrainingSetupPanel : UserControl
             }
 
             var config = BuildTrainingConfig(runMode);
-            var configPath = await WriteTempConfigAsync(config);
+            var configPath = await _configBuilder.WriteTempConfigAsync(config, "train", CancellationToken.None);
             lblTempConfig.Text = $"临时配置路径：{configPath}";
 
             var runId = await _runControl.StartAsync(new RunTrainingCommand
@@ -174,6 +192,7 @@ public sealed partial class TrainingSetupPanel : UserControl
             txtDetails.Text = $"Started run: {runId}\r\nTempConfig: {configPath}";
             _shell.ShowInfo($"已提交运行：{runId}");
             await RefreshRunsAsync();
+            _ = MonitorRunCompletionAsync(runId);
         }
         catch (Exception ex)
         {
@@ -217,97 +236,29 @@ public sealed partial class TrainingSetupPanel : UserControl
             throw new InvalidOperationException("LearningRate 必须是大于 0 的数值。");
         }
 
-        var dataset = new DatasetConfig();
-        if (selectedTask == "ocr")
-        {
-            dataset.Format = "ocr-manifest-v1";
-            dataset.ManifestPath = annotationPath;
-            dataset.RootPath = imageRoot;
-            dataset.AnnotationPath = annotationPath;
-        }
-        else
-        {
-            dataset.Format = "coco";
-            dataset.RootPath = imageRoot;
-            dataset.AnnotationPath = MakeRelativeIfUnderRoot(imageRoot, annotationPath);
-            dataset.TrainSplit = "train";
-            dataset.ValSplit = "val";
-            dataset.TestSplit = "test";
-            dataset.SkipInvalidSamples = false;
-        }
-
         var inputSize = 0;
         _ = int.TryParse(txtInputSize.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out inputSize);
         var numClasses = 0;
         _ = int.TryParse(txtNumClasses.Text, NumberStyles.Integer, CultureInfo.InvariantCulture, out numClasses);
 
-        var config = new TrainingConfig
+        return _configBuilder.Build(new DataTrainingBuildRequest
         {
-            ConfigVersion = "1.0",
-            RunName = string.IsNullOrWhiteSpace(txtRunName.Text) ? string.Empty : txtRunName.Text.Trim(),
-            Mode = mode,
             Task = selectedTask == "ocr" ? TaskType.Ocr : TaskType.Detection,
-            Backend = BackendType.TorchSharp,
+            Mode = mode,
+            AnnotationPath = annotationPath,
+            ImageRoot = imageRoot,
+            DatasetFormat = selectedTask == "ocr" ? "ocr-manifest-v1" : "coco",
             Device = ToDeviceType(cmbDevice.SelectedItem?.ToString()),
-            Dataset = dataset,
-            Model = new ModelConfig
-            {
-                Name = selectedTask == "ocr" ? "ocr-custom" : "det-custom",
-                Architecture = string.IsNullOrWhiteSpace(txtArchitecture.Text) ? "custom" : txtArchitecture.Text.Trim(),
-                Parameters = inputSize > 0 ? new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase)
-                {
-                    ["inputSize"] = JsonSerializer.SerializeToElement(inputSize)
-                } : new Dictionary<string, JsonElement>(StringComparer.OrdinalIgnoreCase)
-            },
-            Optimization = new OptimizationConfig
-            {
-                Epochs = epochs,
-                BatchSize = batchSize,
-                LearningRate = learningRate,
-                Seed = 42
-            },
-            Runtime = new RuntimeConfig
-            {
-                MaxWorkers = 1,
-                Deterministic = true,
-                SaveCheckpoints = false,
-                CheckpointEveryEpochs = 1
-            },
-            Output = new OutputConfig
-            {
-                BaseRunDirectory = "runs",
-                ExperimentGroup = "user-training"
-            },
-            Logging = new LoggingConfig
-            {
-                Level = "Information",
-                WriteJsonLogs = false
-            }
-        };
-
-        if (config.Task == TaskType.Detection && numClasses > 0)
-        {
-            config.TaskOptions["numClasses"] = JsonSerializer.SerializeToElement(numClasses);
-        }
-
-        return config;
-    }
-
-    private static string MakeRelativeIfUnderRoot(string rootPath, string fullFilePath)
-    {
-        if (string.IsNullOrWhiteSpace(rootPath))
-        {
-            return fullFilePath;
-        }
-
-        var normalizedRoot = Path.GetFullPath(rootPath).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
-        var normalizedFile = Path.GetFullPath(fullFilePath);
-        if (!normalizedFile.StartsWith(normalizedRoot, StringComparison.OrdinalIgnoreCase))
-        {
-            return normalizedFile;
-        }
-
-        return Path.GetRelativePath(normalizedRoot, normalizedFile);
+            RunName = string.IsNullOrWhiteSpace(txtRunName.Text) ? null : txtRunName.Text.Trim(),
+            Architecture = string.IsNullOrWhiteSpace(txtArchitecture.Text) ? null : txtArchitecture.Text.Trim(),
+            InputSize = inputSize,
+            NumClasses = numClasses,
+            Epochs = epochs,
+            BatchSize = batchSize,
+            LearningRate = learningRate,
+            ExperimentGroup = "user-training",
+            ModelName = selectedTask == "ocr" ? "ocr-custom" : "det-custom"
+        });
     }
 
     private static DeviceType ToDeviceType(string? deviceText)
@@ -318,16 +269,6 @@ public sealed partial class TrainingSetupPanel : UserControl
             "Cuda" => DeviceType.Cuda,
             _ => DeviceType.Auto
         };
-    }
-
-    private static async Task<string> WriteTempConfigAsync(TrainingConfig config)
-    {
-        var tempDir = Path.Combine(Path.GetTempPath(), "TransformersMini", "temp-configs");
-        Directory.CreateDirectory(tempDir);
-        var tempPath = Path.Combine(tempDir, $"train-{DateTime.Now:yyyyMMdd-HHmmss}.json");
-        var json = JsonSerializer.Serialize(config, JsonOptions);
-        await File.WriteAllTextAsync(tempPath, json);
-        return tempPath;
     }
 
     private async void btnCancelRun_Click(object sender, EventArgs e)
@@ -491,6 +432,78 @@ public sealed partial class TrainingSetupPanel : UserControl
 #else
         return false;
 #endif
+    }
+
+    private async Task MonitorRunCompletionAsync(string runId)
+    {
+        // 中文说明：后台轮询运行状态，持续刷新最近事件/指标，避免“只看到启动日志”的困惑。
+        for (var i = 0; i < 300; i++)
+        {
+            await Task.Delay(1000);
+            var detail = await _runControl.GetRunAsync(runId, CancellationToken.None);
+            if (detail is null)
+            {
+                continue;
+            }
+
+            var status = detail.Status ?? string.Empty;
+            if (string.Equals(status, "Running", StringComparison.OrdinalIgnoreCase) ||
+                string.Equals(status, "Pending", StringComparison.OrdinalIgnoreCase))
+            {
+                txtDetails.Text = BuildLiveProgressText(detail);
+            }
+
+            if (!string.Equals(status, "Running", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(status, "Pending", StringComparison.OrdinalIgnoreCase))
+            {
+                if (string.Equals(status, "Succeeded", StringComparison.OrdinalIgnoreCase))
+                {
+                    var modelPath = Path.Combine(detail.RunDirectory, "artifacts", "model-metadata.json");
+                    var reportPath = Path.Combine(detail.RunDirectory, "reports", "summary.json");
+                    var artifactHint = File.Exists(modelPath)
+                        ? $"模型产物：{modelPath}"
+                        : $"未检测到模型元数据，建议检查报告：{reportPath}";
+                    txtDetails.Text = $"RunId: {detail.RunId}\r\nStatus: {detail.Status}\r\nRunDir: {detail.RunDirectory}\r\n{artifactHint}";
+                    _shell.ShowInfo($"训练完成：{detail.RunId}。{artifactHint}");
+                }
+                else
+                {
+                    txtDetails.Text = $"RunId: {detail.RunId}\r\nStatus: {detail.Status}\r\nMessage: {detail.Message}\r\nRunDir: {detail.RunDirectory}";
+                    _shell.ShowError($"运行结束：{detail.Status}，{detail.Message}");
+                }
+
+                await RefreshRunsAsync();
+                return;
+            }
+        }
+
+        _shell.ShowWarning($"运行 {runId} 仍在执行，请在运行列表中继续观察。");
+    }
+
+    private static string BuildLiveProgressText(RunDetailDto detail)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine($"RunId: {detail.RunId}");
+        sb.AppendLine($"Status: {detail.Status}");
+        sb.AppendLine($"Task/Backend/Mode: {detail.Task}/{detail.Backend}/{detail.Mode}");
+        sb.AppendLine($"RunDir: {detail.RunDirectory}");
+        sb.AppendLine();
+
+        var latestEvent = detail.Events.OrderByDescending(x => x.Timestamp).FirstOrDefault();
+        if (latestEvent is not null)
+        {
+            sb.AppendLine($"Latest Event: [{latestEvent.Level}] {latestEvent.EventType}");
+            sb.AppendLine(latestEvent.Message);
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("Latest Metrics:");
+        foreach (var metric in detail.LatestMetrics.OrderBy(x => x.Name).Take(8))
+        {
+            sb.AppendLine($"- {metric.Name} step={metric.Step} value={metric.Value:0.######}");
+        }
+
+        return sb.ToString();
     }
 
     private static DeviceType NormalizeDeviceForBuild(DeviceType configured)

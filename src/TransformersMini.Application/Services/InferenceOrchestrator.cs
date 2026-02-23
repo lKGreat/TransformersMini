@@ -44,7 +44,7 @@ public sealed class InferenceOrchestrator : IInferenceOrchestrator
             RequestedRunId = command.RequestedRunId,
             RequestedRunName = command.RequestedRunName
         };
-        var (config, _) = await _configLoader.LoadAsync(trainCommand, ct);
+        var (config, resolvedJson) = await _configLoader.LoadAsync(trainCommand, ct);
 
         // 设备解析
         if (command.ForcedDevice.HasValue)
@@ -65,16 +65,22 @@ public sealed class InferenceOrchestrator : IInferenceOrchestrator
             Task = config.Task,
             Backend = config.Backend,
             Device = config.Device,
-            Status = RunStatus.Running,
+            Status = RunStatus.Pending,
             StartedAt = startedAt
         };
 
         var runDirectory = await _artifactStore.PrepareRunDirectoryAsync(metadata, ct);
         metadata.RunDirectory = runDirectory;
         await _runRepository.CreateRunAsync(metadata, ct);
+        await _artifactStore.WriteTextAsync(runId, "resolved-config.json", resolvedJson, ct);
+        await _runRepository.AppendEventAsync(
+            runId,
+            new RunEvent("Information", "InferRunCreated", $"Task={config.Task}, Device={config.Device}, ModelRunDirectory={command.ModelRunDirectory}", DateTimeOffset.UtcNow),
+            ct);
 
         try
         {
+            await _runRepository.UpdateStatusAsync(runId, RunStatus.Running, "Inference task started.", null, ct);
             // 加载数据（推理时主要使用 test split，fallback 到 val）
             var adapter = _dataAdapters.FirstOrDefault(a => string.Equals(a.DatasetFormat, config.Dataset.Format, StringComparison.OrdinalIgnoreCase))
                 ?? throw new InvalidOperationException($"未找到数据适配器：{config.Dataset.Format}");
@@ -107,7 +113,13 @@ public sealed class InferenceOrchestrator : IInferenceOrchestrator
         catch (Exception ex)
         {
             _logger.LogError(ex, "推理异常 RunId={RunId}", runId);
-            await _runRepository.UpdateStatusAsync(runId, RunStatus.Failed, ex.Message, DateTimeOffset.UtcNow, ct);
+            var diagnosticMessage =
+                $"Inference failed: {ex.GetType().Name} | Task={config.Task} | Device={config.Device} | ConfigPath={command.ConfigPath} | ModelRunDirectory={command.ModelRunDirectory}";
+            await _runRepository.AppendEventAsync(
+                runId,
+                new RunEvent("Error", "InferenceUnhandledException", $"{diagnosticMessage} | Message={ex.Message}", DateTimeOffset.UtcNow),
+                CancellationToken.None);
+            await _runRepository.UpdateStatusAsync(runId, RunStatus.Failed, diagnosticMessage, DateTimeOffset.UtcNow, CancellationToken.None);
             throw;
         }
     }

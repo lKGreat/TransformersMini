@@ -116,3 +116,9 @@ public interface IAnnotationService
     Task SaveAsYoloAsync(AnnotationSession session, string outputDirectory, CancellationToken ct);
     Task<AnnotationSession> ImportDetectionPredictionsAsync(AnnotationSession session, string inferenceSamplesJsonlPath, float minScore, CancellationToken ct);
 }
+
+public interface IDataTrainingConfigBuilder
+{
+    TrainingConfig Build(DataTrainingBuildRequest request);
+    Task<string> WriteTempConfigAsync(TrainingConfig config, string filePrefix, CancellationToken ct);
+}

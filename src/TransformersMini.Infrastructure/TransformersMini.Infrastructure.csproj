@@ -3,7 +3,6 @@
     <TargetFramework>net10.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
-    <ProjectReference Include="..\TransformersMini.Application\TransformersMini.Application.csproj" />
     <ProjectReference Include="..\TransformersMini.Contracts\TransformersMini.Contracts.csproj" />
     <ProjectReference Include="..\TransformersMini.SharedKernel\TransformersMini.SharedKernel.csproj" />
     <ProjectReference Include="..\TransformersMini.Infrastructure.Storage\TransformersMini.Infrastructure.Storage.csproj" />

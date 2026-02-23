@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using TransformersMini.Application.DependencyInjection;
 using TransformersMini.Contracts.Abstractions;
 using TransformersMini.Infrastructure.DependencyInjection;
 
@@ -12,14 +13,16 @@ internal static class Program
         ApplicationConfiguration.Initialize();
 
         var services = new ServiceCollection();
+        services.AddTransformersMiniApplication();
         services.AddTransformersMiniPlatform();
         using var provider = services.BuildServiceProvider();
         var runControl = provider.GetRequiredService<IRunControlService>();
         var systemProbe = provider.GetRequiredService<ISystemProbe>();
         var inferenceOrchestrator = provider.GetRequiredService<IInferenceOrchestrator>();
         var runQueryRepository = provider.GetRequiredService<IRunQueryRepository>();
+        var dataTrainingConfigBuilder = provider.GetRequiredService<IDataTrainingConfigBuilder>();
         var annotationService = provider.GetRequiredService<IAnnotationService>();
 
-        System.Windows.Forms.Application.Run(new MainForm(runControl, systemProbe, inferenceOrchestrator, runQueryRepository, annotationService));
+        System.Windows.Forms.Application.Run(new MainForm(runControl, systemProbe, inferenceOrchestrator, runQueryRepository, dataTrainingConfigBuilder, annotationService));
     }
 }

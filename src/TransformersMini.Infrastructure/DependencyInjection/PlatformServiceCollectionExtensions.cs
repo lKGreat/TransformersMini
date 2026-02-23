@@ -1,6 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
-using TransformersMini.Application.DependencyInjection;
 using TransformersMini.Contracts.Abstractions;
 using TransformersMini.DataAdapters.Coco;
 using TransformersMini.DataAdapters.OcrManifest;
@@ -18,7 +17,6 @@ public static class PlatformServiceCollectionExtensions
     public static IServiceCollection AddTransformersMiniPlatform(this IServiceCollection services, string? runsRoot = null)
     {
         services.AddLogging(builder => builder.AddConsole());
-        services.AddTransformersMiniApplication();
         services.AddTransformersMiniStorage(runsRoot);
 
         services.AddSingleton<ISystemProbe, SystemProbe>();

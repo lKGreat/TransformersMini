@@ -9,6 +9,7 @@ public static class ApplicationServiceCollectionExtensions
     public static IServiceCollection AddTransformersMiniApplication(this IServiceCollection services)
     {
         services.AddSingleton<ITrainingConfigLoader, JsonTrainingConfigLoader>();
+        services.AddSingleton<IDataTrainingConfigBuilder, DataTrainingConfigBuilder>();
         services.AddSingleton<ITrainingOrchestrator, TrainingOrchestrator>();
         services.AddSingleton<IInferenceOrchestrator, InferenceOrchestrator>();
         services.AddSingleton<IAnnotationService, AnnotationService>();

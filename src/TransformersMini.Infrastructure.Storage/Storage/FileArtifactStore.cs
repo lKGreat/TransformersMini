@@ -1,5 +1,6 @@
-﻿using System.Text;
+using System.Text;
 using Microsoft.Data.Sqlite;
+using Microsoft.Extensions.Logging;
 using TransformersMini.Contracts.Abstractions;
 using TransformersMini.Contracts.Runtime;
 
@@ -8,16 +9,18 @@ namespace TransformersMini.Infrastructure.Storage.Storage;
 public sealed class FileArtifactStore : IArtifactStore
 {
     private readonly string _root;
+    private readonly ILogger<FileArtifactStore>? _logger;
     private readonly object _gate = new();
     private readonly Dictionary<string, string> _runDirs = new(StringComparer.OrdinalIgnoreCase);
 
-    public FileArtifactStore() : this(Path.Combine(Environment.CurrentDirectory, "runs"))
+    public FileArtifactStore(ILogger<FileArtifactStore> logger) : this(Path.Combine(Environment.CurrentDirectory, "runs"), logger)
     {
     }
 
-    public FileArtifactStore(string root)
+    public FileArtifactStore(string root, ILogger<FileArtifactStore>? logger = null)
     {
         _root = Path.GetFullPath(root);
+        _logger = logger;
         Directory.CreateDirectory(_root);
     }
 
@@ -86,9 +89,10 @@ public sealed class FileArtifactStore : IArtifactStore
             cmd.Parameters.AddWithValue("$updated_at", DateTimeOffset.UtcNow.ToString("O"));
             cmd.ExecuteNonQuery();
         }
-        catch
+        catch (Exception ex)
         {
-            // 中文说明：产物登记失败不应影响主流程。
+            // 中文说明：产物登记失败不应影响主流程，但必须保留可观测性。
+            _logger?.LogWarning(ex, "Artifact register failed. RunId={RunId}, RelativePath={RelativePath}", runId, relativePath);
         }
     }
 
