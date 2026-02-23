@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Logging;
 using TransformersMini.Contracts.Abstractions;
+using TransformersMini.Contracts.Configurations;
 using TransformersMini.Contracts.Runtime;
 using TransformersMini.SharedKernel.Core;
 
@@ -44,7 +45,18 @@ public sealed class InferenceOrchestrator : IInferenceOrchestrator
             RequestedRunId = command.RequestedRunId,
             RequestedRunName = command.RequestedRunName
         };
-        var (config, resolvedJson) = await _configLoader.LoadAsync(trainCommand, ct);
+        TrainingConfig config;
+        string resolvedJson;
+        try
+        {
+            (config, resolvedJson) = await _configLoader.LoadAsync(trainCommand, ct);
+        }
+        catch (InvalidOperationException ex) when (ex.Message.Contains("JSON Schema 校验失败", StringComparison.Ordinal))
+        {
+            throw new InvalidOperationException(
+                "推理配置文件格式不正确。请使用训练 run 目录下的 resolved-config.json（或原始训练配置），不要使用 artifacts/model-metadata.json 或 reports/*.json。",
+                ex);
+        }
 
         // 设备解析
         if (command.ForcedDevice.HasValue)

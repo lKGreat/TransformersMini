@@ -52,7 +52,7 @@ internal sealed class JsonSchemaStrictValidator
                 }
 
                 var name = requiredProp.GetString()!;
-                if (!value.TryGetProperty(name, out _))
+                if (!TryGetPropertyIgnoreCase(value, name, out _))
                 {
                     errors.Add($"{path}: 缺少必填字段 '{name}'");
                 }
@@ -68,7 +68,7 @@ internal sealed class JsonSchemaStrictValidator
 
         foreach (var property in value.EnumerateObject())
         {
-            if (hasProps && properties.TryGetProperty(property.Name, out var childSchema))
+            if (hasProps && TryGetPropertyIgnoreCase(properties, property.Name, out var childSchema))
             {
                 ValidateNode(property.Value, childSchema, $"{path}.{property.Name}", errors);
                 continue;
@@ -79,6 +79,29 @@ internal sealed class JsonSchemaStrictValidator
                 errors.Add($"{path}: 不允许的字段 '{property.Name}'");
             }
         }
+    }
+
+    private static bool TryGetPropertyIgnoreCase(JsonElement obj, string name, out JsonElement value)
+    {
+        if (obj.ValueKind == JsonValueKind.Object)
+        {
+            if (obj.TryGetProperty(name, out value))
+            {
+                return true;
+            }
+
+            foreach (var prop in obj.EnumerateObject())
+            {
+                if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = prop.Value;
+                    return true;
+                }
+            }
+        }
+
+        value = default;
+        return false;
     }
 
     private static void ValidateArray(JsonElement value, JsonElement schema, string path, List<string> errors)
