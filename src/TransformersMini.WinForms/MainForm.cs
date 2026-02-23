@@ -24,7 +24,7 @@ public sealed class MainForm : Form
         var runPanel = new TrainingSetupPanel(runControl, runQueryRepository, systemProbe);
         runTab.Controls.Add(runPanel);
 
-        var inferencePanel = new InferencePanel(inferenceOrchestrator, systemProbe);
+        var inferencePanel = new InferencePanel(inferenceOrchestrator, systemProbe, runQueryRepository);
         inferenceTab.Controls.Add(inferencePanel);
 
         var annotationIntroPanel = new Panel { Dock = DockStyle.Fill };

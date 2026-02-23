@@ -1,10 +1,11 @@
 using TransformersMini.Contracts.Abstractions;
+using TransformersMini.Contracts.Runtime;
 
 namespace TransformersMini.WinForms;
 
 public sealed class InferencePanel : UserControl
 {
-    public InferencePanel(IInferenceOrchestrator inferenceOrchestrator, ISystemProbe systemProbe)
+    public InferencePanel(IInferenceOrchestrator inferenceOrchestrator, ISystemProbe systemProbe, IRunQueryRepository runQueryRepository)
     {
         Dock = DockStyle.Fill;
 
@@ -53,9 +54,65 @@ public sealed class InferencePanel : UserControl
             form.Show(this);
         };
 
+        var quickInferLatestButton = new Button
+        {
+            Text = "一键推理最近训练产物",
+            Width = 200,
+            Height = 36,
+            Top = 96,
+            Left = 376
+        };
+        quickInferLatestButton.Click += async (_, _) =>
+        {
+            quickInferLatestButton.Enabled = false;
+            try
+            {
+                var query = await runQueryRepository.QueryAsync(new RunQueryFilter
+                {
+                    Mode = "Train",
+                    Status = "Succeeded",
+                    Limit = 1,
+                    OrderBy = "started_at desc"
+                }, CancellationToken.None);
+
+                var latest = query.Items.FirstOrDefault();
+                if (latest is null)
+                {
+                    MessageBox.Show(this, "未找到成功训练的历史运行，无法一键推理。", "提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                var resolvedConfigPath = Path.Combine(latest.RunDirectory, "resolved-config.json");
+                var configPath = File.Exists(resolvedConfigPath) ? resolvedConfigPath : latest.ConfigPath;
+                if (string.IsNullOrWhiteSpace(configPath) || !File.Exists(configPath))
+                {
+                    MessageBox.Show(this, $"未找到可用配置文件。\r\n尝试路径：{resolvedConfigPath}", "一键推理失败", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                var form = new BatchInferenceForm(inferenceOrchestrator, systemProbe);
+                form.Show(this);
+                form.ApplyQuickPreset(
+                    configPath,
+                    latest.RunDirectory,
+                    $"{latest.RunName}-quick-infer",
+                    maxSamples: 20,
+                    autoStart: true);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(this, $"一键推理失败：{ex.Message}", "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            finally
+            {
+                quickInferLatestButton.Enabled = true;
+            }
+        };
+
         Controls.Add(title);
         Controls.Add(description);
         Controls.Add(openBatchButton);
         Controls.Add(openSingleButton);
+        Controls.Add(quickInferLatestButton);
     }
 }

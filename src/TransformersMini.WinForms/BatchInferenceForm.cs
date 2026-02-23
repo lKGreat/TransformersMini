@@ -22,6 +22,19 @@ public sealed partial class BatchInferenceForm : Form
         InitializeDeviceCombo();
     }
 
+    public void ApplyQuickPreset(string configPath, string modelRunDirectory, string? runName, int maxSamples = 20, bool autoStart = true)
+    {
+        txtConfigPath.Text = configPath;
+        txtModelRunDir.Text = modelRunDirectory;
+        txtRunName.Text = runName ?? string.Empty;
+        txtMaxSamples.Text = maxSamples > 0 ? maxSamples.ToString() : "0";
+
+        if (autoStart)
+        {
+            btnStartInfer_Click(this, EventArgs.Empty);
+        }
+    }
+
     private void InitializeDeviceCombo()
     {
         cmbDevice.Items.Clear();
