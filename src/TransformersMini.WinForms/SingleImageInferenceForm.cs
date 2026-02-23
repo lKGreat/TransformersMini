@@ -1,5 +1,3 @@
-using System.Text;
-using System.Text.Json;
 using TransformersMini.Contracts.Abstractions;
 using TransformersMini.Contracts.Runtime;
 using TransformersMini.SharedKernel.Core;
@@ -13,7 +11,6 @@ namespace TransformersMini.WinForms;
 public sealed partial class SingleImageInferenceForm : Form
 {
     private readonly IInferenceOrchestrator _inferenceOrchestrator;
-    private string? _selectedImagePath;
     private bool _isRunning;
 
     public SingleImageInferenceForm(IInferenceOrchestrator inferenceOrchestrator)
@@ -31,7 +28,6 @@ public sealed partial class SingleImageInferenceForm : Form
         };
         if (dialog.ShowDialog(this) == DialogResult.OK)
         {
-            _selectedImagePath = dialog.FileName;
             txtImagePath.Text = dialog.FileName;
             picPreview.ImageLocation = dialog.FileName;
         }
@@ -95,69 +91,7 @@ public sealed partial class SingleImageInferenceForm : Form
 
             var result = await _inferenceOrchestrator.ExecuteAsync(command, CancellationToken.None);
 
-            var sb = new StringBuilder();
-            sb.AppendLine($"推理完成！RunId: {result.RunId}");
-            sb.AppendLine($"Status: {result.Status}");
-            sb.AppendLine();
-
-            // 读取推理报告
-            var inferReportPath = Path.Combine(result.RunDirectory, "reports", "inference.json");
-            var samplesPath = Path.Combine(result.RunDirectory, "reports", "inference-samples.jsonl");
-
-            if (File.Exists(inferReportPath))
-            {
-                sb.AppendLine("--- 推理汇总 ---");
-                try
-                {
-                    var reportJson = await File.ReadAllTextAsync(inferReportPath);
-                    using var doc = JsonDocument.Parse(reportJson);
-                    var task = doc.RootElement.TryGetProperty("task", out var taskEl) ? taskEl.GetString() : "unknown";
-
-                    if (string.Equals(task, "detection", StringComparison.OrdinalIgnoreCase))
-                    {
-                        AppendDetectionSummary(sb, doc.RootElement);
-                    }
-                    else if (string.Equals(task, "ocr", StringComparison.OrdinalIgnoreCase))
-                    {
-                        AppendOcrSummary(sb, doc.RootElement);
-                    }
-                    else
-                    {
-                        foreach (var prop in doc.RootElement.EnumerateObject())
-                        {
-                            sb.AppendLine($"  {prop.Name}: {prop.Value.GetRawText()}");
-                        }
-                    }
-                }
-                catch
-                {
-                    sb.AppendLine("（读取报告失败）");
-                }
-            }
-
-            if (File.Exists(samplesPath))
-            {
-                sb.AppendLine();
-                sb.AppendLine("--- 样本明细 ---");
-                try
-                {
-                    var firstLine = (await File.ReadAllLinesAsync(samplesPath)).FirstOrDefault();
-                    if (!string.IsNullOrWhiteSpace(firstLine))
-                    {
-                        using var sampleDoc = JsonDocument.Parse(firstLine);
-                        foreach (var prop in sampleDoc.RootElement.EnumerateObject())
-                        {
-                            sb.AppendLine($"  {prop.Name}: {prop.Value.GetRawText()}");
-                        }
-                    }
-                }
-                catch
-                {
-                    sb.AppendLine("（读取样本明细失败）");
-                }
-            }
-
-            txtResults.Text = sb.ToString();
+            txtResults.Text = await InferenceReportFormatter.BuildSummaryAsync(result, CancellationToken.None);
 
             if (!string.IsNullOrWhiteSpace(result.RunDirectory))
             {
@@ -173,39 +107,6 @@ public sealed partial class SingleImageInferenceForm : Form
         {
             _isRunning = false;
             btnRunInfer.Enabled = true;
-        }
-    }
-
-    private static void AppendDetectionSummary(StringBuilder sb, JsonElement root)
-    {
-        sb.AppendLine("任务类型：检测（Detection）");
-        if (root.TryGetProperty("totalDetectedBoxes", out var boxes))
-        {
-            sb.AppendLine($"  检测到框数量: {boxes.GetRawText()}");
-        }
-
-        if (root.TryGetProperty("averageBoxesPerSample", out var avg))
-        {
-            sb.AppendLine($"  平均框数/样本: {avg.GetRawText()}");
-        }
-
-        if (root.TryGetProperty("inputSize", out var size))
-        {
-            sb.AppendLine($"  输入尺寸: {size.GetRawText()}");
-        }
-    }
-
-    private static void AppendOcrSummary(StringBuilder sb, JsonElement root)
-    {
-        sb.AppendLine("任务类型：OCR");
-        if (root.TryGetProperty("averageCer", out var cer))
-        {
-            sb.AppendLine($"  平均 CER: {cer.GetRawText()}");
-        }
-
-        if (root.TryGetProperty("exactMatchCount", out var exact))
-        {
-            sb.AppendLine($"  精确匹配数: {exact.GetRawText()}");
         }
     }
 

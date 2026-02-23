@@ -18,7 +18,8 @@ internal static class Program
         var systemProbe = provider.GetRequiredService<ISystemProbe>();
         var inferenceOrchestrator = provider.GetRequiredService<IInferenceOrchestrator>();
         var runQueryRepository = provider.GetRequiredService<IRunQueryRepository>();
+        var annotationService = provider.GetRequiredService<IAnnotationService>();
 
-        System.Windows.Forms.Application.Run(new MainForm(runControl, systemProbe, inferenceOrchestrator, runQueryRepository));
+        System.Windows.Forms.Application.Run(new MainForm(runControl, systemProbe, inferenceOrchestrator, runQueryRepository, annotationService));
     }
 }

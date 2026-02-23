@@ -103,3 +103,16 @@ public interface IInferenceTask
     TaskType TaskType { get; }
     Task<RunResult> ExecuteAsync(InferenceExecutionContext context, CancellationToken ct);
 }
+
+/// <summary>
+/// 标注应用服务：维护内部标注会话，并负责 COCO/YOLO 双向读写。
+/// </summary>
+public interface IAnnotationService
+{
+    Task<AnnotationSession> CreateSessionFromImageDirectoryAsync(string imageDirectory, IReadOnlyList<string> classNames, CancellationToken ct);
+    Task<AnnotationSession> LoadFromCocoAsync(string cocoFilePath, string imageBaseDirectory, CancellationToken ct);
+    Task<AnnotationSession> LoadFromYoloAsync(string imageDirectory, string labelsDirectory, string classesFilePath, CancellationToken ct);
+    Task SaveAsCocoAsync(AnnotationSession session, string outputFilePath, CancellationToken ct);
+    Task SaveAsYoloAsync(AnnotationSession session, string outputDirectory, CancellationToken ct);
+    Task<AnnotationSession> ImportDetectionPredictionsAsync(AnnotationSession session, string inferenceSamplesJsonlPath, float minScore, CancellationToken ct);
+}
