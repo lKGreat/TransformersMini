@@ -1,6 +1,8 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
+    <!-- 中文说明：默认使用 CPU 版 TorchSharp 运行时；如需 GPU，构建时传入 -p:UseTorchSharpCuda=true -->
+    <UseTorchSharpCuda Condition="'$(UseTorchSharpCuda)' == ''">false</UseTorchSharpCuda>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\TransformersMini.Contracts\TransformersMini.Contracts.csproj" />
@@ -8,6 +10,7 @@
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="TorchSharp" />
-    <PackageReference Include="TorchSharp-cpu" />
+    <PackageReference Include="TorchSharp-cpu" Condition="'$(UseTorchSharpCuda)' != 'true'" />
+    <PackageReference Include="TorchSharp-cuda-windows" Condition="'$(UseTorchSharpCuda)' == 'true'" />
   </ItemGroup>
 </Project>

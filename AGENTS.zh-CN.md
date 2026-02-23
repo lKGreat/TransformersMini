@@ -16,10 +16,11 @@
 
 ## 构建、测试与本地开发命令
 
-- `dotnet build .\TransformersMini.sln -c Release`：构建全部项目。
-- `dotnet test .\TransformersMini.sln -c Release`：运行全部测试。
+- `dotnet build .\TransformersMini.slnx -c Release`：构建全部项目。
+- `dotnet test .\TransformersMini.slnx -c Release`：运行全部测试。
 - `dotnet run --project .\src\TransformersMini.Cli\TransformersMini.Cli.csproj -- run --config .\configs\detection\sample.det.train.json --dry-run`：验证配置与统一入口（不执行真实训练）。
 - `dotnet run --project .\src\TransformersMini.WinForms\TransformersMini.WinForms.csproj`：启动 WinForms 工作台。
+- 强制质量门槛：提交前必须执行 `dotnet build .\TransformersMini.slnx -c Release`，结果必须为 `0错误 0警告`（警告按阻塞处理）。
 
 ## 编码风格与命名约定
 
@@ -52,6 +53,7 @@
   - 变更目的与范围
   - 关联文档路径（`docs/requirements`、`docs/adrs`、`docs/iterations`、`docs/tasks`）
   - 构建/测试结果（命令与结论）
+  - `0错误 0警告` 编译确认
   - WinForms 界面改动截图（如涉及 UI）
 
 ## 安全与配置注意事项

@@ -16,10 +16,11 @@
 
 ## Build, Test, and Development Commands
 
-- `dotnet build .\TransformersMini.sln -c Release`: build all projects.
-- `dotnet test .\TransformersMini.sln -c Release`: run all tests.
+- `dotnet build .\TransformersMini.slnx -c Release`: build all projects.
+- `dotnet test .\TransformersMini.slnx -c Release`: run all tests.
 - `dotnet run --project .\src\TransformersMini.Cli\TransformersMini.Cli.csproj -- run --config .\configs\detection\sample.det.train.json --dry-run`: validate config and orchestration without real training.
 - `dotnet run --project .\src\TransformersMini.WinForms\TransformersMini.WinForms.csproj`: launch WinForms workbench.
+- Mandatory quality gate: before commit/PR, `dotnet build .\TransformersMini.slnx -c Release` must be `0 errors, 0 warnings` (warnings are blocking).
 
 ## Coding Style & Naming Conventions
 
@@ -48,6 +49,7 @@
   - purpose and scope
   - linked requirement/ADR/iteration/task docs (paths under `docs/`)
   - test/build evidence (`dotnet build`, `dotnet test`)
+  - confirmation that build result is `0 errors, 0 warnings`
   - screenshots for WinForms UI changes
 
 ## Security & Configuration Tips

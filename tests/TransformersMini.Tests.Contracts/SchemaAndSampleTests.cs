@@ -33,7 +33,8 @@ public sealed class SchemaAndSampleTests
             {
                 candidate = Path.GetFullPath(Path.Combine(candidate, ".."));
             }
-            if (File.Exists(Path.Combine(candidate, "TransformersMini.sln")) || File.Exists(Path.Combine(candidate, "TransformersMini.slnx")))
+
+            if (File.Exists(Path.Combine(candidate, "TransformersMini.slnx")))
             {
                 return candidate;
             }

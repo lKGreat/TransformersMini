@@ -1,2 +1,28 @@
 <Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/src/">
+    <Project Path="src/TransformersMini.Application/TransformersMini.Application.csproj" />
+    <Project Path="src/TransformersMini.Cli/TransformersMini.Cli.csproj" />
+    <Project Path="src/TransformersMini.Contracts/TransformersMini.Contracts.csproj" />
+    <Project Path="src/TransformersMini.DataAdapters.Coco/TransformersMini.DataAdapters.Coco.csproj" />
+    <Project Path="src/TransformersMini.DataAdapters.OcrManifest/TransformersMini.DataAdapters.OcrManifest.csproj" />
+    <Project Path="src/TransformersMini.Domain/TransformersMini.Domain.csproj" />
+    <Project Path="src/TransformersMini.Infrastructure.MLNet/TransformersMini.Infrastructure.MLNet.csproj" />
+    <Project Path="src/TransformersMini.Infrastructure.Storage/TransformersMini.Infrastructure.Storage.csproj" />
+    <Project Path="src/TransformersMini.Infrastructure.TorchSharp/TransformersMini.Infrastructure.TorchSharp.csproj" />
+    <Project Path="src/TransformersMini.Infrastructure/TransformersMini.Infrastructure.csproj" />
+    <Project Path="src/TransformersMini.SharedKernel/TransformersMini.SharedKernel.csproj" />
+    <Project Path="src/TransformersMini.Training.Tasks.Detection/TransformersMini.Training.Tasks.Detection.csproj" />
+    <Project Path="src/TransformersMini.Training.Tasks.Ocr/TransformersMini.Training.Tasks.Ocr.csproj" />
+    <Project Path="src/TransformersMini.WinForms/TransformersMini.WinForms.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/TransformersMini.Tests.Contracts/TransformersMini.Tests.Contracts.csproj" />
+    <Project Path="tests/TransformersMini.Tests.Integration/TransformersMini.Tests.Integration.csproj" />
+    <Project Path="tests/TransformersMini.Tests.Unit/TransformersMini.Tests.Unit.csproj" />
+  </Folder>
 </Solution>
