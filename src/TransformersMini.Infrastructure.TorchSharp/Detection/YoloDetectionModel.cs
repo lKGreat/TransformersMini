@@ -56,11 +56,8 @@ public sealed class YoloDetectionModel : Module<Tensor, DetectHeadOutput>
         using var p4D = p4;
         using var p5D = p5;
 
-        // PAN Neck → (F3, F4, F5)
+        // PAN Neck → (F3, F4, F5)（所有权转移给 DetectHeadOutput.Feats，由调用方在 loss 计算后负责释放）
         var (f3, f4, f5) = _neck.forward((p3, p4, p5));
-        using var f3D = f3;
-        using var f4D = f4;
-        using var f5D = f5;
 
         // Detect Head → DetectHeadOutput
         return _head.forward(new List<Tensor> { f3, f4, f5 });

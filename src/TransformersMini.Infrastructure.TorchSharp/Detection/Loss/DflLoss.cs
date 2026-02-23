@@ -40,7 +40,13 @@ internal sealed class DflLoss : Module<Tensor, Tensor, Tensor>
         using var ceL = functional.cross_entropy(predDist, tlFlat, reduction: nn.Reduction.None).view(tl.shape);
         using var ceR = functional.cross_entropy(predDist, trFlat, reduction: nn.Reduction.None).view(tl.shape);
 
-        // 加权平均，保留最后一维 keepdim=true → [N, 1]
-        return (ceL * wl + ceR * wr).mean(new long[] { -1 }, keepdim: true);
+        // 一维 target（[N]）时返回 [N,1]；二维 target（[B,4]）时按最后一维求均值返回 [B,1]
+        using var loss = ceL * wl + ceR * wr;
+        if (loss.dim() == 1)
+        {
+            return loss.unsqueeze(-1);
+        }
+
+        return loss.mean(new long[] { -1 }, keepdim: true);
     }
 }

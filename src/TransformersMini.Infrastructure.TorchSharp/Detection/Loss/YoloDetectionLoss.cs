@@ -131,10 +131,13 @@ public sealed class YoloDetectionLoss
             using var bdFgReshaped = bdFg.view(numFg * 4, _regMax);
 
             // 目标 ltrb（归一化到 [0, reg_max-1]）
+            using var fgExp2 = fgMask.unsqueeze(-1).expand(-1, -1, 2); // [bs, total_a, 2] 用于 anchor 选择
             using var stridesFg = strideTensor.unsqueeze(0).expand(bs, -1)
                 .masked_select(fgMask).unsqueeze(-1); // [numFg, 1]
-            using var tgtLtrb = XyxyToLtrb(tgtBoxesFg, anchorsPx.unsqueeze(0).expand(bs, -1, -1)
-                .masked_select(fgExpBox).view(numFg, 4)) / stridesFg;
+            using var anchorsFg = anchorsPx.unsqueeze(0).expand(bs, -1, -1)
+                .masked_select(fgExp2).view(numFg, 2); // [numFg, 2] 网格坐标
+            using var anchorsFgPx = anchorsFg * stridesFg; // 转像素坐标
+            using var tgtLtrb = XyxyToLtrb(tgtBoxesFg, anchorsFgPx) / stridesFg;
             using var tgtLtrbClamped = tgtLtrb.clamp(0, _regMax - 1 - 0.01f);
             using var tgtLtrbFlat = tgtLtrbClamped.view(numFg * 4);
 
@@ -144,7 +147,10 @@ public sealed class YoloDetectionLoss
         }
 
         // ── 加权合并 ─────────────────────────────────────────────────────
-        var totalLoss = boxLoss * BoxGain + clsLoss * ClsGain + dflLoss * DflGain;
+        var weightedBox = boxLoss * BoxGain;
+        var weightedCls = clsLoss * ClsGain;
+        var weightedDfl = dflLoss * DflGain;
+        var totalLoss = weightedBox + weightedCls + weightedDfl;
 
         anchorPoints.Dispose();
         strideTensor.Dispose();
@@ -152,7 +158,7 @@ public sealed class YoloDetectionLoss
         clsLoss.Dispose();
         dflLoss.Dispose();
 
-        return (totalLoss, boxLoss * BoxGain, clsLoss * ClsGain, dflLoss * DflGain);
+        return (totalLoss, weightedBox, weightedCls, weightedDfl);
     }
 
     // ─── 工具方法 ────────────────────────────────────────────────────────

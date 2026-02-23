@@ -18,5 +18,6 @@
     <ProjectReference Include="..\..\src\TransformersMini.Contracts\TransformersMini.Contracts.csproj" />
     <ProjectReference Include="..\..\src\TransformersMini.Domain\TransformersMini.Domain.csproj" />
     <ProjectReference Include="..\..\src\TransformersMini.Application\TransformersMini.Application.csproj" />
+    <ProjectReference Include="..\..\src\TransformersMini.Infrastructure.TorchSharp\TransformersMini.Infrastructure.TorchSharp.csproj" />
   </ItemGroup>
 </Project>

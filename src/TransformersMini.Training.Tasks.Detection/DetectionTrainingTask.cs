@@ -421,6 +421,7 @@ public sealed class DetectionTrainingTask : ITrainingTask
         var arch = context.Config.Model?.Architecture ?? string.Empty;
         return arch.Equals("yolov8", StringComparison.OrdinalIgnoreCase)
             || arch.Equals("yolo-v8", StringComparison.OrdinalIgnoreCase)
+            || arch.Equals("yolo-like", StringComparison.OrdinalIgnoreCase)
             || arch.Equals("yolo", StringComparison.OrdinalIgnoreCase);
     }
 
@@ -515,11 +516,15 @@ public sealed class DetectionTrainingTask : ITrainingTask
 
                     var (totalLoss, boxLoss, clsLoss, dflLoss) = lossFunction.Compute(headOutput, gtBboxes, gtLabels, maskGt);
 
-                    // 释放 GT 张量
+                    // 释放 GT 张量和 head 中间特征
                     gtBboxes.Dispose();
                     gtLabels.Dispose();
                     maskGt.Dispose();
                     headOutput.Primary.Dispose();
+                    if (headOutput.Feats != null)
+                    {
+                        foreach (var f in headOutput.Feats) f.Dispose();
+                    }
 
                     totalLoss.backward();
                     var gradNorm = ComputeGradientNorm(model);
