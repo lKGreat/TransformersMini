@@ -86,7 +86,8 @@ public sealed partial class SingleImageInferenceForm : Form
                 ModelRunDirectory = txtModelDir.Text,
                 RequestedRunName = "single-image-infer",
                 ForcedDevice = DeviceType.Cpu,
-                MaxSamples = 1
+                MaxSamples = 1,
+                SingleImagePath = txtImagePath.Text
             };
 
             var result = await _inferenceOrchestrator.ExecuteAsync(command, CancellationToken.None);

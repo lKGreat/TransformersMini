@@ -141,6 +141,8 @@ public sealed class RunInferenceCommand
     public DeviceType? ForcedDevice { get; init; }
     /// <summary>推理样本数量上限，0 表示不限制。</summary>
     public int MaxSamples { get; init; }
+    /// <summary>单图推理时指定图片路径，留空表示按数据集样本推理。</summary>
+    public string? SingleImagePath { get; init; }
 }
 
 /// <summary>
@@ -159,4 +161,6 @@ public sealed class InferenceExecutionContext
     public required string ModelRunDirectory { get; init; }
     /// <summary>推理样本数量上限，0 表示全量。</summary>
     public int MaxSamples { get; init; }
+    /// <summary>单图推理时指定图片路径，留空表示按数据集样本推理。</summary>
+    public string? SingleImagePath { get; init; }
 }

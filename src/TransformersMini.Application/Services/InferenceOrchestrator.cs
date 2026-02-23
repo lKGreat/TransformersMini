@@ -64,6 +64,16 @@ public sealed class InferenceOrchestrator : IInferenceOrchestrator
             config.Device = command.ForcedDevice.Value;
         }
 
+        string? singleImagePath = null;
+        if (!string.IsNullOrWhiteSpace(command.SingleImagePath))
+        {
+            singleImagePath = Path.GetFullPath(command.SingleImagePath);
+            if (!File.Exists(singleImagePath))
+            {
+                throw new FileNotFoundException("单图推理图片不存在。", singleImagePath);
+            }
+        }
+
         var runId = command.RequestedRunId ?? $"infer-{Guid.NewGuid():N}"[..22];
         var runName = command.RequestedRunName ?? $"infer-{config.Task}-{DateTime.UtcNow:yyyyMMdd-HHmmss}";
         var startedAt = DateTimeOffset.UtcNow;
@@ -113,7 +123,8 @@ public sealed class InferenceOrchestrator : IInferenceOrchestrator
                 ModelRunDirectory = string.IsNullOrWhiteSpace(command.ModelRunDirectory)
                     ? runDirectory
                     : Path.GetFullPath(command.ModelRunDirectory),
-                MaxSamples = command.MaxSamples
+                MaxSamples = command.MaxSamples,
+                SingleImagePath = singleImagePath
             };
 
             var result = await inferTask.ExecuteAsync(context, ct);

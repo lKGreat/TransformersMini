@@ -76,12 +76,28 @@ public sealed class OcrInferenceTask : IInferenceTask
             }
             model.eval();
 
-            // 优先使用 test split，fallback 到 val，再到 train
-            var samples = context.Data.Test.Count > 0
-                ? context.Data.Test
-                : context.Data.Validation.Count > 0
-                    ? context.Data.Validation
-                    : context.Data.Train;
+            IReadOnlyList<DataSample> samples;
+            if (!string.IsNullOrWhiteSpace(context.SingleImagePath))
+            {
+                var singlePath = Path.GetFullPath(context.SingleImagePath);
+                samples =
+                [
+                    new DataSample("single-image", singlePath, null, "infer-single")
+                ];
+                await context.RunRepository.AppendEventAsync(
+                    context.RunId,
+                    new RunEvent("Information", "SingleImageOverride", $"本次推理使用单图输入：{singlePath}", DateTimeOffset.UtcNow),
+                    ct);
+            }
+            else
+            {
+                // 优先使用 test split，fallback 到 val，再到 train
+                samples = context.Data.Test.Count > 0
+                    ? context.Data.Test
+                    : context.Data.Validation.Count > 0
+                        ? context.Data.Validation
+                        : context.Data.Train;
+            }
 
             if (context.MaxSamples > 0 && samples.Count > context.MaxSamples)
             {

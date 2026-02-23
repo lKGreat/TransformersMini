@@ -167,6 +167,7 @@ static RunInferenceCommand ParseInferArgs(string[] args)
 {
     var configPath = string.Empty;
     var modelRunDirectory = string.Empty;
+    string? singleImagePath = null;
     string? runName = null;
     DeviceType? device = null;
     var maxSamples = 0;
@@ -183,6 +184,9 @@ static RunInferenceCommand ParseInferArgs(string[] args)
                 break;
             case "--run-name":
                 runName = args[++i];
+                break;
+            case "--image":
+                singleImagePath = args[++i];
                 break;
             case "--device":
                 device = args[++i].ToLowerInvariant() switch
@@ -213,7 +217,8 @@ static RunInferenceCommand ParseInferArgs(string[] args)
         ModelRunDirectory = modelRunDirectory,
         RequestedRunName = runName,
         ForcedDevice = device,
-        MaxSamples = maxSamples
+        MaxSamples = maxSamples,
+        SingleImagePath = singleImagePath
     };
 }
 
@@ -228,7 +233,7 @@ static void PrintHelp()
     Console.WriteLine("  train-data --task detection|ocr --annotation <path> --image-root <dir> [--dataset-format coco|ocr-manifest-v1] [--device cpu|cuda|auto] [--run-name <name>] [--arch <name>] [--input-size <n>] [--num-classes <n>] [--epochs <n>] [--batch-size <n>] [--learning-rate <v>]");
     Console.WriteLine("  validate-data --task detection|ocr --annotation <path> --image-root <dir> [same options as train-data]");
     Console.WriteLine("  test-data --task detection|ocr --annotation <path> --image-root <dir> [same options as train-data]");
-    Console.WriteLine("  infer --config <path> [--model-run-dir <dir>] [--device cpu|cuda|auto] [--max-samples <n>] [--run-name <name>]");
+    Console.WriteLine("  infer --config <path> [--model-run-dir <dir>] [--image <path>] [--device cpu|cuda|auto] [--max-samples <n>] [--run-name <name>]");
 }
 
 static void ValidateBuildModeAndDeviceForCli(DeviceType? forcedDevice, ISystemProbe systemProbe)

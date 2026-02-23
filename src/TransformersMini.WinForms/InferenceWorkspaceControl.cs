@@ -1,6 +1,7 @@
 using TransformersMini.Contracts.Abstractions;
 using TransformersMini.Contracts.Runtime;
 using TransformersMini.SharedKernel.Core;
+using System.Text.Json;
 
 namespace TransformersMini.WinForms;
 
@@ -18,6 +19,7 @@ public sealed class InferenceWorkspaceControl : UserControl
     private readonly ComboBox _device = new() { Width = 120, DropDownStyle = ComboBoxStyle.DropDownList };
     private readonly TextBox _singleImagePath = new() { Width = 520, PlaceholderText = "单图路径（可选，当前后端按maxSamples=1执行）" };
     private readonly TextBox _resultText = new() { Dock = DockStyle.Fill, Multiline = true, ScrollBars = ScrollBars.Both, ReadOnly = true };
+    private readonly PictureBox _previewBox = new() { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.Black };
     private readonly Label _runtimeHint = new() { AutoSize = true };
     private bool _isRunning;
 
@@ -40,7 +42,7 @@ public sealed class InferenceWorkspaceControl : UserControl
         var layout = new TableLayoutPanel
         {
             Dock = DockStyle.Top,
-            Height = 210,
+            Height = 220,
             ColumnCount = 1,
             RowCount = 7
         };
@@ -93,7 +95,19 @@ public sealed class InferenceWorkspaceControl : UserControl
         };
         layout.Controls.Add(desc, 0, 6);
 
-        Controls.Add(_resultText);
+        var resultSplit = new SplitContainer
+        {
+            Dock = DockStyle.Fill,
+            Orientation = Orientation.Vertical,
+            Panel1MinSize = 420,
+            Panel2MinSize = 260
+        };
+        resultSplit.SizeChanged += (_, _) => EnsureValidSplitterDistance(resultSplit);
+        EnsureValidSplitterDistance(resultSplit);
+        resultSplit.Panel1.Controls.Add(_resultText);
+        resultSplit.Panel2.Controls.Add(_previewBox);
+
+        Controls.Add(resultSplit);
         Controls.Add(layout);
         RefreshRuntimeHint();
     }
@@ -177,6 +191,12 @@ public sealed class InferenceWorkspaceControl : UserControl
 
             if (singleMode)
             {
+                if (string.IsNullOrWhiteSpace(_singleImagePath.Text) || !File.Exists(_singleImagePath.Text))
+                {
+                    _shell.ShowWarning("单图推理需要先选择有效的图片路径。");
+                    return;
+                }
+
                 maxSamples = 1;
             }
 
@@ -186,10 +206,12 @@ public sealed class InferenceWorkspaceControl : UserControl
                 ModelRunDirectory = _modelRunDir.Text,
                 RequestedRunName = string.IsNullOrWhiteSpace(_runName.Text) ? null : _runName.Text,
                 ForcedDevice = forcedDevice,
-                MaxSamples = maxSamples
+                MaxSamples = maxSamples,
+                SingleImagePath = singleMode ? _singleImagePath.Text : null
             }, CancellationToken.None);
 
             _resultText.Text = await InferenceReportFormatter.BuildSummaryAsync(result, CancellationToken.None);
+            await RenderSinglePreviewAsync(result, singleMode);
             _shell.ShowInfo($"推理完成：{result.RunId}");
         }
         catch (Exception ex)
@@ -236,5 +258,154 @@ public sealed class InferenceWorkspaceControl : UserControl
 #else
         return false;
 #endif
+    }
+
+    private static void EnsureValidSplitterDistance(SplitContainer splitContainer)
+    {
+        var min = splitContainer.Panel1MinSize;
+        var max = Math.Max(min, splitContainer.Width - splitContainer.Panel2MinSize);
+        var preferred = (int)(splitContainer.Width * 0.65);
+        splitContainer.SplitterDistance = Math.Clamp(preferred, min, max);
+    }
+
+    private async Task RenderSinglePreviewAsync(RunResult result, bool singleMode)
+    {
+        if (!singleMode)
+        {
+            ReplacePreviewImage(null);
+            return;
+        }
+
+        var samplePath = Path.Combine(result.RunDirectory, "reports", "inference-samples.jsonl");
+        if (!File.Exists(samplePath))
+        {
+            return;
+        }
+
+        var lines = await File.ReadAllLinesAsync(samplePath, CancellationToken.None);
+        var firstLine = lines.FirstOrDefault(x => !string.IsNullOrWhiteSpace(x));
+        if (string.IsNullOrWhiteSpace(firstLine))
+        {
+            return;
+        }
+
+        using var doc = JsonDocument.Parse(firstLine);
+        var root = doc.RootElement;
+        var sourcePath = TryReadString(root, "sourcePath");
+        if (string.IsNullOrWhiteSpace(sourcePath) || !File.Exists(sourcePath))
+        {
+            return;
+        }
+
+        Image? previewImage = null;
+        try
+        {
+            if (root.TryGetProperty("boxes", out var boxes) && boxes.ValueKind == JsonValueKind.Array)
+            {
+                previewImage = RenderDetectionPreview(sourcePath, boxes);
+            }
+            else
+            {
+                var predictedText = TryReadString(root, "predictedText");
+                previewImage = RenderOcrPreview(sourcePath, predictedText ?? string.Empty);
+            }
+
+            var previewPath = Path.Combine(result.RunDirectory, "reports", "single-inference-preview.png");
+            previewImage.Save(previewPath);
+            _resultText.AppendText($"\r\n已生成可视化：{previewPath}\r\n");
+            ReplacePreviewImage(previewImage);
+            previewImage = null;
+        }
+        finally
+        {
+            previewImage?.Dispose();
+        }
+    }
+
+    private static Image RenderDetectionPreview(string sourcePath, JsonElement boxes)
+    {
+        var canvas = new Bitmap(sourcePath);
+        using var g = Graphics.FromImage(canvas);
+        using var boxPen = new Pen(Color.LimeGreen, 2f);
+        using var textBrush = new SolidBrush(Color.Yellow);
+        using var textBackBrush = new SolidBrush(Color.FromArgb(140, 0, 0, 0));
+        using var font = new Font("Microsoft YaHei UI", 10, FontStyle.Bold);
+
+        foreach (var box in boxes.EnumerateArray())
+        {
+            var cx = (float)(TryReadNumber(box, "cx") ?? 0d);
+            var cy = (float)(TryReadNumber(box, "cy") ?? 0d);
+            var bw = (float)(TryReadNumber(box, "bw") ?? 0d);
+            var bh = (float)(TryReadNumber(box, "bh") ?? 0d);
+            var score = TryReadNumber(box, "score") ?? 0d;
+            var categoryId = TryReadString(box, "categoryId") ?? "0";
+
+            var left = Math.Clamp((cx - bw / 2f) * canvas.Width, 0f, canvas.Width - 1f);
+            var top = Math.Clamp((cy - bh / 2f) * canvas.Height, 0f, canvas.Height - 1f);
+            var width = Math.Clamp(bw * canvas.Width, 1f, canvas.Width - left);
+            var height = Math.Clamp(bh * canvas.Height, 1f, canvas.Height - top);
+
+            g.DrawRectangle(boxPen, left, top, width, height);
+            var text = $"cls={categoryId} score={score:0.###}";
+            var textSize = g.MeasureString(text, font);
+            var textRect = new RectangleF(left, Math.Max(0, top - textSize.Height - 2), textSize.Width + 6, textSize.Height + 2);
+            g.FillRectangle(textBackBrush, textRect);
+            g.DrawString(text, font, textBrush, textRect.Left + 3, textRect.Top + 1);
+        }
+
+        return canvas;
+    }
+
+    private static Image RenderOcrPreview(string sourcePath, string predictedText)
+    {
+        var canvas = new Bitmap(sourcePath);
+        using var g = Graphics.FromImage(canvas);
+        using var textBrush = new SolidBrush(Color.White);
+        using var textBackBrush = new SolidBrush(Color.FromArgb(150, 0, 0, 0));
+        using var font = new Font("Microsoft YaHei UI", 14, FontStyle.Bold);
+
+        var text = string.IsNullOrWhiteSpace(predictedText) ? "(空结果)" : predictedText;
+        var textSize = g.MeasureString(text, font);
+        var boxHeight = Math.Max(textSize.Height + 16, 40f);
+        g.FillRectangle(textBackBrush, 0, 0, canvas.Width, boxHeight);
+        g.DrawString($"OCR: {text}", font, textBrush, 10, (boxHeight - textSize.Height) / 2f);
+        return canvas;
+    }
+
+    private void ReplacePreviewImage(Image? image)
+    {
+        var old = _previewBox.Image;
+        _previewBox.Image = image;
+        old?.Dispose();
+    }
+
+    private static string? TryReadString(JsonElement element, string name)
+    {
+        if (!element.TryGetProperty(name, out var value))
+        {
+            return null;
+        }
+
+        return value.ValueKind switch
+        {
+            JsonValueKind.String => value.GetString(),
+            JsonValueKind.Number => value.GetRawText(),
+            _ => value.GetRawText()
+        };
+    }
+
+    private static double? TryReadNumber(JsonElement element, string name)
+    {
+        if (!element.TryGetProperty(name, out var value))
+        {
+            return null;
+        }
+
+        if (value.ValueKind == JsonValueKind.Number && value.TryGetDouble(out var number))
+        {
+            return number;
+        }
+
+        return null;
     }
 }
