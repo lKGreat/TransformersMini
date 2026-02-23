@@ -1,4 +1,5 @@
-using System.Text;
+﻿using System.Text;
+using Microsoft.Data.Sqlite;
 using TransformersMini.Contracts.Abstractions;
 using TransformersMini.Contracts.Runtime;
 
@@ -42,6 +43,7 @@ public sealed class FileArtifactStore : IArtifactStore
         var path = ResolvePath(runId, relativePath);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, content, Encoding.UTF8);
+        TryRegisterArtifact(runId, relativePath, path);
         return Task.CompletedTask;
     }
 
@@ -51,7 +53,54 @@ public sealed class FileArtifactStore : IArtifactStore
         var path = ResolvePath(runId, relativePath);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.AppendAllText(path, line + Environment.NewLine, Encoding.UTF8);
+        TryRegisterArtifact(runId, relativePath, path);
         return Task.CompletedTask;
+    }
+
+    private void TryRegisterArtifact(string runId, string relativePath, string fullPath)
+    {
+        try
+        {
+            var dbPath = Path.Combine(_root, "runs.db");
+            if (!File.Exists(dbPath))
+            {
+                return;
+            }
+
+            using var conn = new SqliteConnection($"Data Source={dbPath}");
+            conn.Open();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText =
+                """
+                INSERT INTO run_artifacts(run_id, artifact_path, artifact_kind, size_bytes, updated_at)
+                VALUES($run_id, $artifact_path, $artifact_kind, $size_bytes, $updated_at)
+                ON CONFLICT(run_id, artifact_path) DO UPDATE SET
+                    artifact_kind = excluded.artifact_kind,
+                    size_bytes = excluded.size_bytes,
+                    updated_at = excluded.updated_at;
+                """;
+            cmd.Parameters.AddWithValue("$run_id", runId);
+            cmd.Parameters.AddWithValue("$artifact_path", relativePath.Replace('\\', '/'));
+            cmd.Parameters.AddWithValue("$artifact_kind", InferArtifactKind(relativePath));
+            cmd.Parameters.AddWithValue("$size_bytes", new FileInfo(fullPath).Length);
+            cmd.Parameters.AddWithValue("$updated_at", DateTimeOffset.UtcNow.ToString("O"));
+            cmd.ExecuteNonQuery();
+        }
+        catch
+        {
+            // 中文说明：产物登记失败不应影响主流程。
+        }
+    }
+
+    private static string InferArtifactKind(string relativePath)
+    {
+        var normalized = relativePath.Replace('\\', '/').ToLowerInvariant();
+        if (normalized.StartsWith("reports/")) return "report";
+        if (normalized.StartsWith("artifacts/")) return "artifact";
+        if (normalized.EndsWith(".jsonl")) return "stream-log";
+        if (normalized.EndsWith(".log")) return "log";
+        if (normalized.EndsWith("resolved-config.json")) return "config";
+        return "file";
     }
 
     private string ResolvePath(string runId, string relativePath)
@@ -78,3 +127,4 @@ public sealed class FileArtifactStore : IArtifactStore
         return Path.Combine(fallback, relativePath);
     }
 }
+

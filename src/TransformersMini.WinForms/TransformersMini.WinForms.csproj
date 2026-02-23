@@ -3,6 +3,7 @@
     <OutputType>WinExe</OutputType>
     <TargetFramework>net10.0-windows</TargetFramework>
     <UseWindowsForms>true</UseWindowsForms>
+    <DefineConstants Condition="'$(UseTorchSharpCuda)' == 'true'">$(DefineConstants);TORCHSHARP_CUDA_BUILD</DefineConstants>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\TransformersMini.Application\TransformersMini.Application.csproj" />

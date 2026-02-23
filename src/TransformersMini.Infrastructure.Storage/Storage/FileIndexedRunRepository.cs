@@ -63,6 +63,37 @@ public sealed class FileIndexedRunRepository : IRunRepository
         }
     }
 
+    public async Task UpsertTagAsync(string runId, string key, string value, CancellationToken ct)
+    {
+        await _mutex.WaitAsync(ct);
+        try
+        {
+            var db = await LoadAsync(ct);
+            var run = db.Runs.FirstOrDefault(x => x.RunId == runId);
+            if (run is null)
+            {
+                return;
+            }
+
+            var index = run.Tags.FindIndex(x => string.Equals(x.Key, key, StringComparison.OrdinalIgnoreCase));
+            var tag = new RunTagDto(key, value, DateTimeOffset.UtcNow);
+            if (index >= 0)
+            {
+                run.Tags[index] = tag;
+            }
+            else
+            {
+                run.Tags.Add(tag);
+            }
+
+            await SaveAsync(db, ct);
+        }
+        finally
+        {
+            _mutex.Release();
+        }
+    }
+
     public async Task AppendMetricAsync(string runId, MetricPoint metric, CancellationToken ct)
     {
         await _mutex.WaitAsync(ct);

@@ -47,6 +47,34 @@
     "runtime": { "type": "object" },
     "output": { "type": "object" },
     "logging": { "type": "object" },
-    "taskOptions": { "type": "object" }
+    "taskOptions": {
+      "type": "object",
+      "properties": {
+        "inputSize": { "type": "integer", "minimum": 1 },
+        "numClasses": { "type": "integer", "minimum": 1 },
+        "normalizeMean": {
+          "type": "array",
+          "items": { "type": "number" },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "normalizeStd": {
+          "type": "array",
+          "items": { "type": "number", "exclusiveMinimum": 0 },
+          "minItems": 3,
+          "maxItems": 3
+        },
+        "resizeSampler": {
+          "type": "string",
+          "enum": ["nearest", "bilinear", "triangle", "bicubic", "lanczos3"]
+        },
+        "targetBoxStrategy": {
+          "type": "string",
+          "enum": ["first", "largest", "average"]
+        },
+        "targetTopK": { "type": "integer", "minimum": 1 }
+      },
+      "additionalProperties": true
+    }
   }
 }

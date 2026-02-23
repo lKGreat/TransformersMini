@@ -55,6 +55,11 @@ public sealed class SqliteRunRepository : IRunRepository
                 """;
             BindRun(cmd, metadata);
             await cmd.ExecuteNonQueryAsync(ct);
+            await UpsertTagAsync(conn, metadata.RunId, "system.run_name", metadata.RunName, ct);
+            await UpsertTagAsync(conn, metadata.RunId, "system.mode", metadata.Mode.ToString(), ct);
+            await UpsertTagAsync(conn, metadata.RunId, "system.task", metadata.Task.ToString(), ct);
+            await UpsertTagAsync(conn, metadata.RunId, "system.backend", metadata.Backend.ToString(), ct);
+            await UpsertTagAsync(conn, metadata.RunId, "system.device", metadata.Device.ToString(), ct);
             return metadata.RunId;
         }
         finally
@@ -88,6 +93,20 @@ public sealed class SqliteRunRepository : IRunRepository
         }
     }
 
+    public async Task UpsertTagAsync(string runId, string key, string value, CancellationToken ct)
+    {
+        await _mutex.WaitAsync(ct);
+        try
+        {
+            await using var conn = await OpenAsync(ct);
+            await UpsertTagAsync(conn, runId, key, value, ct);
+        }
+        finally
+        {
+            _mutex.Release();
+        }
+    }
+
     public async Task AppendMetricAsync(string runId, MetricPoint metric, CancellationToken ct)
     {
         await _mutex.WaitAsync(ct);
@@ -106,6 +125,7 @@ public sealed class SqliteRunRepository : IRunRepository
             cmd.Parameters.AddWithValue("$metric_value", metric.Value);
             cmd.Parameters.AddWithValue("$timestamp", metric.Timestamp.ToString("O"));
             await cmd.ExecuteNonQueryAsync(ct);
+            await UpsertLatestMetricAsync(conn, runId, metric, ct);
         }
         finally
         {
@@ -221,6 +241,9 @@ public sealed class SqliteRunRepository : IRunRepository
 
             detail.Metrics = await LoadMetricsAsync(conn, runId, ct);
             detail.Events = await LoadEventsAsync(conn, runId, ct);
+            detail.Tags = await LoadTagsAsync(conn, runId, ct);
+            detail.Artifacts = await LoadArtifactsAsync(conn, runId, ct);
+            detail.LatestMetrics = await LoadLatestMetricsAsync(conn, runId, ct);
             return detail;
         }
         finally
@@ -273,8 +296,37 @@ public sealed class SqliteRunRepository : IRunRepository
                 timestamp TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS run_tags (
+                run_id TEXT NOT NULL,
+                tag_key TEXT NOT NULL,
+                tag_value TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (run_id, tag_key)
+            );
+
+            CREATE TABLE IF NOT EXISTS run_artifacts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id TEXT NOT NULL,
+                artifact_path TEXT NOT NULL,
+                artifact_kind TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS run_metrics_latest (
+                run_id TEXT NOT NULL,
+                metric_name TEXT NOT NULL,
+                step INTEGER NOT NULL,
+                metric_value REAL NOT NULL,
+                timestamp TEXT NOT NULL,
+                PRIMARY KEY (run_id, metric_name)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_run_metrics_run_id ON run_metrics(run_id);
             CREATE INDEX IF NOT EXISTS idx_run_events_run_id ON run_events(run_id);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_run_artifacts_unique ON run_artifacts(run_id, artifact_path);
+            CREATE INDEX IF NOT EXISTS idx_run_artifacts_run_id ON run_artifacts(run_id);
+            CREATE INDEX IF NOT EXISTS idx_run_tags_run_id ON run_tags(run_id);
             """;
         cmd.ExecuteNonQuery();
     }
@@ -303,6 +355,44 @@ public sealed class SqliteRunRepository : IRunRepository
     }
 
     private static DateTimeOffset ParseTime(string value) => DateTimeOffset.Parse(value, null, System.Globalization.DateTimeStyles.RoundtripKind);
+
+    private static async Task UpsertTagAsync(SqliteConnection conn, string runId, string key, string value, CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            """
+            INSERT INTO run_tags(run_id, tag_key, tag_value, updated_at)
+            VALUES($run_id, $tag_key, $tag_value, $updated_at)
+            ON CONFLICT(run_id, tag_key) DO UPDATE SET
+                tag_value = excluded.tag_value,
+                updated_at = excluded.updated_at;
+            """;
+        cmd.Parameters.AddWithValue("$run_id", runId);
+        cmd.Parameters.AddWithValue("$tag_key", key);
+        cmd.Parameters.AddWithValue("$tag_value", value);
+        cmd.Parameters.AddWithValue("$updated_at", DateTimeOffset.UtcNow.ToString("O"));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
+    private static async Task UpsertLatestMetricAsync(SqliteConnection conn, string runId, MetricPoint metric, CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            """
+            INSERT INTO run_metrics_latest(run_id, metric_name, step, metric_value, timestamp)
+            VALUES($run_id, $metric_name, $step, $metric_value, $timestamp)
+            ON CONFLICT(run_id, metric_name) DO UPDATE SET
+                step = excluded.step,
+                metric_value = excluded.metric_value,
+                timestamp = excluded.timestamp;
+            """;
+        cmd.Parameters.AddWithValue("$run_id", runId);
+        cmd.Parameters.AddWithValue("$metric_name", metric.Name);
+        cmd.Parameters.AddWithValue("$step", metric.Step);
+        cmd.Parameters.AddWithValue("$metric_value", metric.Value);
+        cmd.Parameters.AddWithValue("$timestamp", metric.Timestamp.ToString("O"));
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
 
     private static async Task<List<MetricPoint>> LoadMetricsAsync(SqliteConnection conn, string runId, CancellationToken ct)
     {
@@ -348,6 +438,80 @@ public sealed class SqliteRunRepository : IRunRepository
                 reader.GetString(0),
                 reader.GetString(1),
                 reader.GetString(2),
+                ParseTime(reader.GetString(3))));
+        }
+
+        return list;
+    }
+
+    private static async Task<List<RunTagDto>> LoadTagsAsync(SqliteConnection conn, string runId, CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            """
+            SELECT tag_key, tag_value, updated_at
+            FROM run_tags
+            WHERE run_id = $run_id
+            ORDER BY tag_key ASC;
+            """;
+        cmd.Parameters.AddWithValue("$run_id", runId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        var list = new List<RunTagDto>();
+        while (await reader.ReadAsync(ct))
+        {
+            list.Add(new RunTagDto(
+                reader.GetString(0),
+                reader.GetString(1),
+                ParseTime(reader.GetString(2))));
+        }
+
+        return list;
+    }
+
+    private static async Task<List<RunArtifactDto>> LoadArtifactsAsync(SqliteConnection conn, string runId, CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            """
+            SELECT artifact_path, artifact_kind, size_bytes, updated_at
+            FROM run_artifacts
+            WHERE run_id = $run_id
+            ORDER BY updated_at DESC, artifact_path ASC;
+            """;
+        cmd.Parameters.AddWithValue("$run_id", runId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        var list = new List<RunArtifactDto>();
+        while (await reader.ReadAsync(ct))
+        {
+            list.Add(new RunArtifactDto(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetInt64(2),
+                ParseTime(reader.GetString(3))));
+        }
+
+        return list;
+    }
+
+    private static async Task<List<LatestMetricDto>> LoadLatestMetricsAsync(SqliteConnection conn, string runId, CancellationToken ct)
+    {
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText =
+            """
+            SELECT metric_name, step, metric_value, timestamp
+            FROM run_metrics_latest
+            WHERE run_id = $run_id
+            ORDER BY metric_name ASC;
+            """;
+        cmd.Parameters.AddWithValue("$run_id", runId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        var list = new List<LatestMetricDto>();
+        while (await reader.ReadAsync(ct))
+        {
+            list.Add(new LatestMetricDto(
+                reader.GetString(0),
+                reader.GetInt64(1),
+                reader.GetDouble(2),
                 ParseTime(reader.GetString(3))));
         }
 

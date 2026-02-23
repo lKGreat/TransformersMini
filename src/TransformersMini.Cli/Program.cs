@@ -1,4 +1,4 @@
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using TransformersMini.Contracts.Abstractions;
 using TransformersMini.Contracts.Runtime;
 using TransformersMini.Infrastructure.DependencyInjection;
@@ -31,6 +31,9 @@ runCommand = new RunTrainingCommand
         _ => runCommand.ForcedMode
     }
 };
+
+var systemProbe = provider.GetRequiredService<ISystemProbe>();
+ValidateBuildModeAndDeviceForCli(runCommand.ForcedDevice, systemProbe);
 
 var orchestrator = provider.GetRequiredService<ITrainingOrchestrator>();
 var result = await orchestrator.ExecuteAsync(runCommand, CancellationToken.None);
@@ -93,4 +96,36 @@ static void PrintHelp()
     Console.WriteLine("  train --config <path> [--dry-run]");
     Console.WriteLine("  validate --config <path> [--dry-run]");
     Console.WriteLine("  test --config <path> [--dry-run]");
+}
+
+static void ValidateBuildModeAndDeviceForCli(DeviceType? forcedDevice, ISystemProbe systemProbe)
+{
+    var requestedDevice = forcedDevice ?? DeviceType.Auto;
+
+    if (requestedDevice == DeviceType.Cuda && !IsTorchSharpCudaBuild())
+    {
+        throw new InvalidOperationException(
+            "当前 CLI 为 CPU 构建模式，但指定了 --device cuda。\n" +
+            "请先执行：dotnet build .\\TransformersMini.slnx -c Release -p:UseTorchSharpCuda=true\n" +
+            "然后再执行：dotnet run --project .\\src\\TransformersMini.Cli\\TransformersMini.Cli.csproj -c Release -p:UseTorchSharpCuda=true -- train --config <配置文件> --device cuda");
+    }
+
+    if (requestedDevice == DeviceType.Auto && !IsTorchSharpCudaBuild())
+    {
+        Console.WriteLine("提示：当前 CLI 为 CPU 构建模式，--device auto 将按 CPU 运行。");
+    }
+
+    if (requestedDevice == DeviceType.Cuda && !systemProbe.IsCudaAvailable())
+    {
+        throw new InvalidOperationException("当前机器未检测到可用 CUDA GPU/驱动，无法按 --device cuda 运行。");
+    }
+}
+
+static bool IsTorchSharpCudaBuild()
+{
+#if TORCHSHARP_CUDA_BUILD
+    return true;
+#else
+    return false;
+#endif
 }

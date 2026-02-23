@@ -15,7 +15,8 @@ internal static class Program
         services.AddTransformersMiniPlatform();
         using var provider = services.BuildServiceProvider();
         var runControl = provider.GetRequiredService<IRunControlService>();
+        var systemProbe = provider.GetRequiredService<ISystemProbe>();
 
-        System.Windows.Forms.Application.Run(new MainForm(runControl));
+        System.Windows.Forms.Application.Run(new MainForm(runControl, systemProbe));
     }
 }

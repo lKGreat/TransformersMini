@@ -15,11 +15,11 @@ namespace TransformersMini.Infrastructure.DependencyInjection;
 
 public static class PlatformServiceCollectionExtensions
 {
-    public static IServiceCollection AddTransformersMiniPlatform(this IServiceCollection services)
+    public static IServiceCollection AddTransformersMiniPlatform(this IServiceCollection services, string? runsRoot = null)
     {
         services.AddLogging(builder => builder.AddConsole());
         services.AddTransformersMiniApplication();
-        services.AddTransformersMiniStorage();
+        services.AddTransformersMiniStorage(runsRoot);
 
         services.AddSingleton<ISystemProbe, SystemProbe>();
 

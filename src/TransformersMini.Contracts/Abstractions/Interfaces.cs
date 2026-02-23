@@ -54,6 +54,7 @@ public interface IRunRepository
 {
     Task<string> CreateRunAsync(RunMetadata metadata, CancellationToken ct);
     Task UpdateStatusAsync(string runId, RunStatus status, string? message, DateTimeOffset? endedAt, CancellationToken ct);
+    Task UpsertTagAsync(string runId, string key, string value, CancellationToken ct);
     Task AppendMetricAsync(string runId, MetricPoint metric, CancellationToken ct);
     Task AppendEventAsync(string runId, RunEvent evt, CancellationToken ct);
     Task<IReadOnlyList<RunSummaryDto>> ListAsync(CancellationToken ct);

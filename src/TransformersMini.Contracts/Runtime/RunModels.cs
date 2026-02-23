@@ -36,6 +36,9 @@ public sealed class RunMetadata
 
 public sealed record MetricPoint(string Name, long Step, double Value, DateTimeOffset Timestamp);
 public sealed record RunEvent(string Level, string EventType, string Message, DateTimeOffset Timestamp);
+public sealed record RunTagDto(string Key, string Value, DateTimeOffset UpdatedAt);
+public sealed record RunArtifactDto(string Path, string Kind, long SizeBytes, DateTimeOffset UpdatedAt);
+public sealed record LatestMetricDto(string Name, long Step, double Value, DateTimeOffset Timestamp);
 
 public class RunSummaryDto
 {
@@ -56,6 +59,9 @@ public sealed class RunDetailDto : RunSummaryDto
 {
     public List<MetricPoint> Metrics { get; set; } = new();
     public List<RunEvent> Events { get; set; } = new();
+    public List<RunTagDto> Tags { get; set; } = new();
+    public List<RunArtifactDto> Artifacts { get; set; } = new();
+    public List<LatestMetricDto> LatestMetrics { get; set; } = new();
     public string? Message { get; set; }
 }
 

@@ -50,6 +50,17 @@ packages/
 .dotnet/
 .dotnet-cli/
 
+# Database files
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.db3
+*.mdf
+*.ldf
+*.ndf
+
 # Training runs & artifacts (runs 目录为训练输出，含 DB 与权重)
 runs/
 

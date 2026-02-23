@@ -6,10 +6,18 @@ namespace TransformersMini.Infrastructure.Storage.DependencyInjection;
 
 public static class StorageServiceCollectionExtensions
 {
-    public static IServiceCollection AddTransformersMiniStorage(this IServiceCollection services)
+    public static IServiceCollection AddTransformersMiniStorage(this IServiceCollection services, string? runsRoot = null)
     {
-        services.AddSingleton<IArtifactStore, FileArtifactStore>();
-        services.AddSingleton<IRunRepository, SqliteRunRepository>();
+        if (string.IsNullOrWhiteSpace(runsRoot))
+        {
+            services.AddSingleton<IArtifactStore, FileArtifactStore>();
+            services.AddSingleton<IRunRepository, SqliteRunRepository>();
+            return services;
+        }
+
+        var normalizedRoot = Path.GetFullPath(runsRoot);
+        services.AddSingleton<IArtifactStore>(_ => new FileArtifactStore(normalizedRoot));
+        services.AddSingleton<IRunRepository>(_ => new SqliteRunRepository(Path.Combine(normalizedRoot, "runs.db")));
         return services;
     }
 }

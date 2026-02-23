@@ -11,6 +11,6 @@ public sealed class TorchSharpBackendCapability : IBackendCapability
 
     public string[] GetLimitations(TaskType task) =>
         task == TaskType.Ocr
-            ? ["OCR training is stubbed in the foundation iteration."]
+            ? ["OCR 已实现 TorchSharp MVP（轻量 CNN + 近似字符序列评估），暂非最终识别模型。"]
             : Array.Empty<string>();
 }
